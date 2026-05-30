@@ -59,19 +59,34 @@ class VectorDB:
     # BUILD
     # ─────────────────────────────────────────
 
-    def build(self, chunks: List[Any]) -> "VectorDB":
+    def build(self, chunks: List[Any], force: bool = False) -> "VectorDB":
         """
         Build a new vector DB from a list of Chunk objects.
-        Overwrites any existing in-memory DB reference.
+
+        If the DB already exists on disk and force=False,
+        loads from disk instead of rebuilding — saves minutes.
 
         Args:
-            chunks: List of Chunk objects with .text and .metadata attributes.
+            chunks : List of Chunk objects with .text and .metadata
+            force  : if True, always rebuild even if DB exists
 
         Returns:
             self — for method chaining.
         """
         if not chunks:
             raise ValueError("Cannot build VectorDB from empty chunk list.")
+
+        # ── skip rebuild if already exists ───────────────────
+        if not force and self.db_type == "chroma":
+            if os.path.exists(self.persist_directory):
+                print(f"[VectorDB] Found existing Chroma DB — loading instead of rebuilding.")
+                print(f"[VectorDB] Pass force=True to rebuild from scratch.")
+                return self.load()
+
+        if not force and self.db_type == "faiss":
+            if os.path.exists(self.persist_directory):
+                print(f"[VectorDB] Found existing FAISS index — loading instead of rebuilding.")
+                return self.load()
 
         texts     = [c.text for c in chunks]
         metadatas = [getattr(c, "metadata", {}) for c in chunks]

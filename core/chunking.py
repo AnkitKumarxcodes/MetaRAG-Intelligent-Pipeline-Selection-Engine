@@ -201,8 +201,11 @@ class SemanticChunker(BaseChunker):
     def _get_embeddings(self):
         if self.embedding_model:
             return self.embedding_model
-        from langchain_ollama import OllamaEmbeddings
-        return OllamaEmbeddings(model="nomic-embed-text")  # free default
+        try:
+            from langchain_openai import OpenAIEmbeddings
+            return OpenAIEmbeddings()
+        except ImportError:
+            raise ImportError("Run: pip install langchain-openai  (or pass your own embedding_model)")
 
     def chunk(self, text: str, source: str = "") -> List[Chunk]:
         try:
@@ -288,7 +291,7 @@ Text:
 {text}
 """
 
-    def __init__(self, llm=None, model: str = "llama3"):
+    def __init__(self, llm=None, model: str = "gpt-4o-mini"):
         self.llm = llm
         self.model = model
 
@@ -372,33 +375,58 @@ class Chunker:
         """Chunk multiple documents at once."""
         return self._chunker.chunk_many(docs, sources=sources)
     
-    def chunk_documents(self, docs: List[Any]) -> List[Chunk]:
+    def chunk_documents(self, docs: List[Any], cache_dir: str = "./metarag_cache/chunks", force: bool = False) -> List[Chunk]:
         """
         Chunk Document objects while preserving metadata.
-        Compatible with existing architecture.
-        """
-        all_chunks = []
+        Caches results to disk — same docs + same strategy = instant reload.
 
+        Args:
+            docs      : list of Document or str objects
+            cache_dir : where to store cached chunks
+            force     : if True, ignore cache and rechunk
+        """
+        import hashlib, pickle, os
+
+        # cache key = strategy + hash of all doc text combined
+        content_hash = hashlib.md5(
+            "".join(
+                getattr(d, "text", d) if not isinstance(d, str) else d
+                for d in docs
+            ).encode()
+        ).hexdigest()
+        cache_key  = f"{self.strategy}_{content_hash[:12]}"
+        cache_path = os.path.join(cache_dir, f"{cache_key}.pkl")
+
+        # return from cache if available and not forced
+        if not force and os.path.exists(cache_path):
+            print(f"[Chunker] Cache hit — loading chunks ({cache_key})...")
+            with open(cache_path, "rb") as f:
+                return pickle.load(f)
+
+        # not cached — chunk fresh
+        all_chunks = []
         for i, doc in enumerate(docs):
-            # support both Document and raw string
             if isinstance(doc, str):
-                text = doc
-                metadata = {}
+                text, metadata = doc, {}
             else:
-                text = getattr(doc, "text", "")
+                text     = getattr(doc, "text", "")
                 metadata = getattr(doc, "metadata", {})
 
-            source = metadata.get("source", f"doc_{i}")
-
+            source     = metadata.get("source", f"doc_{i}")
             doc_chunks = self._chunker.chunk(text, source=source)
 
-            # 🔥 merge metadata safely
             for c in doc_chunks:
                 for k, v in metadata.items():
                     if k not in ["strategy", "index"]:
                         c.metadata[k] = v
 
             all_chunks.extend(doc_chunks)
+
+        # save to cache
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_path, "wb") as f:
+            pickle.dump(all_chunks, f)
+        print(f"[Chunker] {len(all_chunks)} chunks cached → {cache_path}")
 
         return all_chunks
 
