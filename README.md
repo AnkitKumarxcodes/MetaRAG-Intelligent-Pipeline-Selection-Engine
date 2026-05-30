@@ -1,5 +1,5 @@
 <div align="center">
-<img src="assets/logo.svg" width="680" alt="MetaRAG — Intelligent Pipeline Selection Engine"/>
+<img src="assets/metarag_logo.svg" width="680" alt="MetaRAG — Intelligent Pipeline Selection Engine"/>
 
 
 <br/>
