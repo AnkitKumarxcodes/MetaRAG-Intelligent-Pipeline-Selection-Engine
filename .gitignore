@@ -1,11 +1,92 @@
-ragvenv/
+# ─────────────────────────────────────────
+# MetaRAG — .gitignore
+# ─────────────────────────────────────────
+
+# ── Python ────────────────────────────────
 __pycache__/
 *.pyc
-.env
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
 
-# keep folder, ignore contents
+# ── Virtual Environment ───────────────────
+ragvenv/
+venv/
+.venv/
+env/
+
+# ── Environment Variables ─────────────────
+.env
+.env.local
+.env.*.local
+
+# ── MetaRAG Generated Data ────────────────
+# all local data — never commit
+.metarag/
+
+# old scattered paths — clean these up
+metarag_db/
+metarag_cache/
+results.json
+
+# ── Data Folder ───────────────────────────
+# keep folder structure, ignore contents
 data/docs/*
 !data/docs/.gitkeep
-test.py
-chroma_db/
-test2.py
+
+data/results/*
+!data/results/.gitkeep
+
+# ── Model Files ───────────────────────────
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.bin
+*.onnx
+model_building/models/*
+!model_building/models/.gitkeep
+
+# ── Cache Files ───────────────────────────
+*.npy
+*.pkl
+*.cache
+
+# ── Logs ──────────────────────────────────
+*.log
+*.jsonl
+logs/
+
+# ── IDE ───────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+
+# ── OS ────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Jupyter ───────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Assets (keep) ─────────────────────────
+# assets/ is committed — contains logo.svg
+!assets/
+!assets/**
+
+queries.py
+model_building
+
+# Line to add — ignore OS temp files
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.tmp

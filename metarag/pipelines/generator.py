@@ -221,3 +221,44 @@ def get_generator(name: str = "ollama", **kwargs) -> BaseGenerator:
         return OpenAIGenerator(**kwargs)
     else:
         raise ValueError(f"Unknown generator '{name}'. Choose from: ollama, groq, openai")
+
+
+# ─────────────────────────────────────────────────────────────
+# GeneratorWrapper — accepts any LangChain LLM directly
+# used by metarag.py so user passes their own llm object
+# ─────────────────────────────────────────────────────────────
+
+class GeneratorWrapper:
+    """
+    Wraps any LangChain chat model (Ollama, Groq, OpenAI etc.)
+    so MetaRAG can call .generate() without knowing the provider.
+    """
+
+    def __init__(self, llm):
+        self.llm        = llm
+        self.model_name = getattr(llm, "model", "custom")
+
+    def generate(self, query: str, chunks: List[Any], pipeline: str = "") -> Answer:
+        prompt = build_prompt(query, chunks)
+
+        for attempt in range(3):
+            try:
+                t0   = time.time()
+                text = self.llm.invoke(prompt).content.strip()
+                ms   = round((time.time() - t0) * 1000, 2)
+                return Answer(
+                    text       = text,
+                    query      = query,
+                    chunks     = chunks,
+                    pipeline   = pipeline,
+                    model      = self.model_name,
+                    latency_ms = ms,
+                )
+            except Exception as e:
+                if "rate_limit" in str(e).lower() or "429" in str(e):
+                    print(f"[Generator] Rate limited — waiting 10s...")
+                    time.sleep(10)
+                else:
+                    raise e
+
+        raise RuntimeError("[Generator] Failed after 3 attempts")
