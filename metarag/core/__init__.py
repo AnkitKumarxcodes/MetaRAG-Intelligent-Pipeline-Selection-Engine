@@ -1,26 +1,38 @@
-"""
-metarag/core/ — Core RAG Components
+# metarag/core/__init__.py
 
-Low-level building blocks for document loading, chunking, embedding, and retrieval.
-
-Exports:
-- DocumentLoader: load docs from multiple formats (PDF, TXT, HTML, DOCX, CSV, JSON, URLs)
-- Chunker: split documents into chunks (6 strategies)
-- CachedEmbeddings: embedding with numpy caching
-- VectorDB: vector database abstraction (Chroma, FAISS)
-- get_retriever: retriever factory (dense, sparse, hybrid, mmr)
-"""
-
-from .loader import DocumentLoader
-from .chunking import Chunker
-from .embeddings import CachedEmbeddings
-from .vector_db import VectorDB
-from .retriever import get_retriever
+from .loader import Document, DocumentLoader, LoaderInterface
+from .chunking import Chunk, Chunker, ChunkerInterface
+from .embeddings import EmbeddingInterface, CachedEmbeddings
+from .vector_db import VectorDBInterface, InMemoryVectorDB, ChromaVectorDB, FAISSVectorDB
+from .retriever import (
+    RetrieverInterface,
+    BM25Retriever,
+    DenseRetriever,
+    HybridRetriever,
+    MMRRetriever,
+)
 
 __all__ = [
+    # loader
+    "Document",
     "DocumentLoader",
+    "LoaderInterface",
+    # chunking
+    "Chunk",
     "Chunker",
+    "ChunkerInterface",
+    # embeddings
+    "EmbeddingInterface",
     "CachedEmbeddings",
-    "VectorDB",
-    "get_retriever",
+    # vector_db
+    "VectorDBInterface",
+    "InMemoryVectorDB",
+    "ChromaVectorDB",
+    "FAISSVectorDB",
+    # retriever
+    "RetrieverInterface",
+    "BM25Retriever",
+    "DenseRetriever",
+    "HybridRetriever",
+    "MMRRetriever",
 ]

@@ -1,21 +1,29 @@
-# pipeline.py
+# metarag/pipeline/pipeline.py
 
 from __future__ import annotations
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Tuple
+
+
+def _chunk_text(chunk) -> str:
+    """Extract text — supports (text, score) tuples, Chunk objects, or raw strings."""
+    if isinstance(chunk, tuple):
+        return chunk[0]
+    if isinstance(chunk, str):
+        return chunk
+    return getattr(chunk, "text", None) or getattr(chunk, "page_content", "")
 
 
 # ─────────────────────────────────────────────────────────────
-# MultiQuery
-# Expands one query into multiple variations for broader retrieval
+# MultiQuery — expands one query into multiple variations
 # ─────────────────────────────────────────────────────────────
 
+# AFTER
 class MultiQuery:
     """
-    Takes one query, generates N variations using an LLM.
-    Retrieves for each variation, merges and deduplicates results.
-
-    Why: A single query might miss relevant chunks due to wording.
-    Multiple variations cast a wider net.
+    Expands a query into N variations using an LLM (GeneratorInterface).
+    Falls back to just the original query if the LLM call fails —
+    this must never crash ask()/benchmark(), since query expansion
+    is an enhancement, not a required step.
     """
 
     PROMPT = """Generate {n} different versions of the following question.
@@ -25,30 +33,32 @@ Return one question per line, no numbering, no bullets.
 Question: {query}
 """
 
-    def __init__(self, llm, n: int = 3):
-        self.llm = llm
-        self.n   = n
+    def __init__(self, generator, n: int = 3):
+        self.generator = generator
+        self.n = n
 
     def expand(self, query: str) -> List[str]:
-        prompt   = self.PROMPT.format(query=query, n=self.n)
-        result   = self.llm.invoke(prompt).content
-        variants = [q.strip() for q in result.strip().splitlines() if q.strip()]
-        print(f"[MultiQuery] Expanded into {len(variants)} variants")
-        return [query] + variants   # always include original
+        prompt = self.PROMPT.format(query=query, n=self.n)
+        try:
+            result = self.generator.generate(prompt)
+            variants = [q.strip() for q in result.strip().splitlines() if q.strip()]
+            print(f"[MultiQuery] Expanded into {len(variants)} variants")
+            return [query] + variants[: self.n]  # cap in case LLM over-generates
+        except Exception as e:
+            print(f"[MultiQuery] Expansion failed ({e}) — falling back to original query only")
+            return [query]
 
 
 # ─────────────────────────────────────────────────────────────
 # HyDE — Hypothetical Document Embedding
-# Generates a fake answer first, retrieves based on that
 # ─────────────────────────────────────────────────────────────
 
+# AFTER
 class HyDE:
     """
-    Instead of retrieving with the raw query,
-    generates a hypothetical answer and retrieves based on that.
-
-    Why: For vague queries, a hypothetical answer is closer
-    to the actual document content than the query itself.
+    Generates a hypothetical answer, retrieves based on that instead of raw query.
+    Falls back to the original query if generation fails — HyDE is an
+    enhancement to retrieval, not something that should crash the pipeline.
     """
 
     PROMPT = """Write a short, factual paragraph that would directly answer
@@ -57,59 +67,81 @@ the following question. Be concise. Do not say you don't know.
 Question: {query}
 Hypothetical answer:"""
 
-    def __init__(self, llm):
-        self.llm = llm
+    def __init__(self, generator):
+        self.generator = generator
 
     def generate_hypothesis(self, query: str) -> str:
-        prompt     = self.PROMPT.format(query=query)
-        hypothesis = self.llm.invoke(prompt).content.strip()
-        print(f"[HyDE] Generated hypothesis ({len(hypothesis)} chars)")
-        return hypothesis
+        prompt = self.PROMPT.format(query=query)
+        try:
+            hypothesis = self.generator.generate(prompt).strip()
+            print(f"[HyDE] Generated hypothesis ({len(hypothesis)} chars)")
+            return hypothesis
+        except Exception as e:
+            print(f"[HyDE] Hypothesis generation failed ({e}) — falling back to raw query")
+            return query
 
 
 # ─────────────────────────────────────────────────────────────
-# Reranker
-# Reorders retrieved chunks by relevance to the query
+# Reranker — reorders chunks by relevance (optional dep)
 # ─────────────────────────────────────────────────────────────
 
+# AFTER
 class Reranker:
     """
-    Takes retrieved chunks and reorders them by relevance.
-    Uses a cross-encoder model — more accurate than embedding similarity.
+    Reorders retrieved chunks using a cross-encoder model.
+    Optional dependency: sentence-transformers.
+    If not installed, falls back to no-op (returns chunks unchanged, still truncated to k).
 
-    Install: pip install sentence-transformers
+    top_k is now a DEFAULT only — callers can override per-call via rerank(k=...),
+    so pipelines respect whatever k the user actually asked for at run(k=...) time.
     """
 
     def __init__(self, model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2", top_k: int = 5):
-        from sentence_transformers import CrossEncoder
-        self.model = CrossEncoder(model)
-        self.top_k = top_k
-        print(f"[Reranker] Loaded {model}")
+        self.default_top_k = top_k
+        self.model = None
 
-    def rerank(self, query: str, chunks: List[Any]) -> List[Any]:
+        try:
+            from sentence_transformers import CrossEncoder
+            self.model = CrossEncoder(model)
+            print(f"[Reranker] Loaded {model}")
+        except ImportError:
+            print(
+                "[Reranker] ⚠️  sentence-transformers not installed. "
+                "Reranking disabled (passthrough). Install: pip install sentence-transformers"
+            )
+
+    def rerank(self, query: str, chunks: List[Any], k: int = None) -> List[Any]:
+        effective_k = k if k is not None else self.default_top_k
+
         if not chunks:
             return chunks
 
-        pairs  = [(query, c.page_content) for c in chunks]
+        if self.model is None:
+            return chunks[:effective_k]
+
+        texts = [_chunk_text(c) for c in chunks]
+        pairs = [(query, t) for t in texts]
         scores = self.model.predict(pairs)
 
+        # Merge rerank scores back onto chunks — replaces stale retrieval scores
+        # with real post-rerank relevance (this also folds in fix #9)
         ranked = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
-        result = [chunk for chunk, _ in ranked[: self.top_k]]
+        result = [
+            (_chunk_text(chunk), float(score)) if not isinstance(chunk, tuple) else (chunk[0], float(score))
+            for chunk, score in ranked[:effective_k]
+        ]
 
         print(f"[Reranker] Reranked {len(chunks)} → top {len(result)} chunks")
         return result
 
 
 # ─────────────────────────────────────────────────────────────
-# Deduplication
-# Removes near-identical chunks before sending to LLM
+# Deduplicator — removes near-identical chunks
 # ─────────────────────────────────────────────────────────────
 
 class Deduplicator:
     """
-    Removes chunks that are too similar to each other.
-    Prevents the LLM from seeing the same information repeated.
-
+    Removes chunks too similar to each other (word-overlap based, no dependencies).
     threshold: 0.0 = remove nothing, 1.0 = remove everything similar
     """
 
@@ -120,11 +152,11 @@ class Deduplicator:
         if not chunks:
             return chunks
 
-        seen   = []
+        seen = []
         result = []
 
         for chunk in chunks:
-            text = chunk.page_content
+            text = _chunk_text(chunk)
             if not self._is_duplicate(text, seen):
                 seen.append(text)
                 result.append(chunk)
@@ -139,7 +171,6 @@ class Deduplicator:
         return False
 
     def _similarity(self, a: str, b: str) -> float:
-        # simple character overlap — no dependencies needed
         set_a, set_b = set(a.lower().split()), set(b.lower().split())
         if not set_a or not set_b:
             return 0.0
@@ -158,243 +189,132 @@ class BasePipeline:
 
 
 # ─────────────────────────────────────────────────────────────
-# Pipeline A — Straight retrieval, no extras
-# Fast, simple, good baseline
+# Composable Pipeline — router builds combinations dynamically
 # ─────────────────────────────────────────────────────────────
-
-class StraightPipeline(BasePipeline):
-    """
-    query → retrieve → return chunks
-
-    No multiquery, no reranking, no dedup.
-    Fastest pipeline. Router uses this for simple, clear queries.
-    """
-    name = "straight"
-
-    def __init__(self, retriever):
-        self.retriever = retriever
-
-    def run(self, query: str) -> dict:
-        print(f"[{self.name}] Running on: '{query}'")
-        chunks = self.retriever.retrieve(query)
-        return {
-            "query":    query,
-            "chunks":   chunks,
-            "pipeline": self.name,
-        }
-
-
-# ─────────────────────────────────────────────────────────────
-# Pipeline B — MultiQuery retrieval
-# Better coverage for ambiguous queries
-# ─────────────────────────────────────────────────────────────
-
-class MultiQueryPipeline(BasePipeline):
-    """
-    query → expand to N variants → retrieve for each → merge → deduplicate
-
-    Router uses this when query is short, vague, or ambiguous.
-    """
-    name = "multiquery"
-
-    def __init__(self, retriever, llm, n_variants: int = 3):
-        self.retriever   = retriever
-        self.multi_query = MultiQuery(llm, n=n_variants)
-        self.dedup       = Deduplicator()
-
-    def run(self, query: str) -> dict:
-        print(f"[{self.name}] Running on: '{query}'")
-
-        variants = self.multi_query.expand(query)
-
-        all_chunks = []
-        for q in variants:
-            all_chunks.extend(self.retriever.retrieve(q))
-
-        chunks = self.dedup.deduplicate(all_chunks)
-
-        return {
-            "query":    query,
-            "chunks":   chunks,
-            "pipeline": self.name,
-            "variants": variants,
-        }
-
-
-# ─────────────────────────────────────────────────────────────
-# Pipeline C — Reranked retrieval
-# More precise, slightly slower
-# ─────────────────────────────────────────────────────────────
-
-class RerankedPipeline(BasePipeline):
-    """
-    query → retrieve → rerank → return top chunks
-
-    Router uses this when precision matters more than speed.
-    Good for factual, specific queries.
-    """
-    name = "reranked"
-
-    def __init__(self, retriever, reranker: Reranker):
-        self.retriever = retriever
-        self.reranker  = reranker
-
-    def run(self, query: str) -> dict:
-        print(f"[{self.name}] Running on: '{query}'")
-
-        chunks  = self.retriever.retrieve(query)
-        reranked = self.reranker.rerank(query, chunks)
-
-        return {
-            "query":    query,
-            "chunks":   reranked,
-            "pipeline": self.name,
-        }
-
-
-# ─────────────────────────────────────────────────────────────
-# Pipeline D — HyDE retrieval
-# Best for vague, open-ended queries
-# ─────────────────────────────────────────────────────────────
-
-class HyDEPipeline(BasePipeline):
-    """
-    query → generate hypothesis → retrieve using hypothesis → return chunks
-
-    Router uses this when query is vague or conceptual.
-    "explain...", "what is the difference...", "how does... work"
-    """
-    name = "hyde"
-
-    def __init__(self, retriever, llm):
-        self.retriever = retriever
-        self.hyde      = HyDE(llm)
-
-    def run(self, query: str) -> dict:
-        print(f"[{self.name}] Running on: '{query}'")
-
-        hypothesis = self.hyde.generate_hypothesis(query)
-        chunks     = self.retriever.retrieve(hypothesis)
-
-        return {
-            "query":      query,
-            "chunks":     chunks,
-            "pipeline":   self.name,
-            "hypothesis": hypothesis,
-        }
-
-
-# ─────────────────────────────────────────────────────────────
-# Pipeline E — Full pipeline
-# MultiQuery + Rerank + Dedup
-# Slowest but most thorough
-# ─────────────────────────────────────────────────────────────
-
-class FullPipeline(BasePipeline):
-    """
-    query → expand → retrieve → rerank → deduplicate
-
-    Router uses this for complex, multi-hop, or high-stakes queries.
-    """
-    name = "full"
-
-    def __init__(self, retriever, llm, reranker: Reranker, n_variants: int = 3):
-        self.retriever   = retriever
-        self.multi_query = MultiQuery(llm, n=n_variants)
-        self.reranker    = reranker
-        self.dedup       = Deduplicator()
-
-    def run(self, query: str) -> dict:
-        print(f"[{self.name}] Running on: '{query}'")
-
-        # expand
-        variants   = self.multi_query.expand(query)
-
-        # retrieve for all variants
-        all_chunks = []
-        for q in variants:
-            all_chunks.extend(self.retriever.retrieve(q))
-
-        # rerank
-        reranked = self.reranker.rerank(query, all_chunks)
-
-        # dedup
-        chunks = self.dedup.deduplicate(reranked)
-
-        return {
-            "query":    query,
-            "chunks":   chunks,
-            "pipeline": self.name,
-            "variants": variants,
-        }
-
-# pipeline.py — add this
 
 class Pipeline(BasePipeline):
     """
-    Composable pipeline. Router builds it with whatever 
-    combination of steps it needs.
-    
-    router says → Pipeline(retriever, multiquery=True, rerank=True)
+    Composable pipeline. Combine any retriever with optional
+    multiquery, reranking, and HyDE.
+
+    retriever: object with .retrieve(query, k) → List[(text, score)]
     """
-    
+
+    name = "custom"
+
     def __init__(
         self,
         retriever,
         multiquery: Optional[MultiQuery] = None,
-        reranker:   Optional[Reranker]   = None,
-        hyde:       Optional[HyDE]       = None,
+        reranker: Optional[Reranker] = None,
+        hyde: Optional[HyDE] = None,
+        name: str = None,
     ):
-        self.retriever  = retriever
-        self.multiquery = multiquery
-        self.reranker   = reranker
-        self.hyde       = hyde
-        self.dedup      = Deduplicator()
+        if not hasattr(retriever, "retrieve"):
+            raise TypeError("retriever must have a .retrieve(query, k) method")
 
-    def run(self, query: str) -> dict:
-        
-        # step 1 — HyDE transforms query if enabled
+        self.retriever = retriever
+        self.multiquery = multiquery
+        self.reranker = reranker
+        self.hyde = hyde
+        self.dedup = Deduplicator()
+        if name:
+            self.name = name
+
+    # AFTER
+    def run(self, query: str, k: int = 4) -> dict:
+        print(f"[{self.name}] Running on: '{query}'")
+
         retrieve_query = query
-        hypothesis     = None
+        hypothesis = None
         if self.hyde:
-            hypothesis     = self.hyde.generate_hypothesis(query)
+            hypothesis = self.hyde.generate_hypothesis(query)
             retrieve_query = hypothesis
 
-        # step 2 — expand query if multiquery enabled
         queries = [retrieve_query]
         if self.multiquery:
             queries = self.multiquery.expand(retrieve_query)
 
-        # step 3 — retrieve for all queries
         all_chunks = []
         for q in queries:
-            all_chunks.extend(self.retriever.retrieve(q))
+            all_chunks.extend(self.retriever.retrieve(q, k=k))
 
-        # step 4 — rerank if enabled
         if self.reranker:
-            all_chunks = self.reranker.rerank(query, all_chunks)
+            all_chunks = self.reranker.rerank(query, all_chunks, k=k)   # k passed at call time — see fix below
+        else:
+            # No reranker — sort by score descending before truncating, so the
+            # best k survive, not just the first k encountered across queries
+            all_chunks.sort(key=lambda c: c[1] if isinstance(c, tuple) else 0, reverse=True)
 
-        # step 5 — always dedup
         chunks = self.dedup.deduplicate(all_chunks)
+        chunks = chunks[:k]   # ← the actual fix: always truncate back to k regardless of path taken
 
         return {
-            "query":      query,
-            "chunks":     chunks,
-            "pipeline":   self.name,
+            "query": query,
+            "chunks": chunks,
+            "pipeline": self.name,
             "hypothesis": hypothesis,
         }
 
 
 # ─────────────────────────────────────────────────────────────
-# Registry — router uses this to pick pipeline by name
+# Preset Pipelines — common configurations, ready to use
+# ─────────────────────────────────────────────────────────────
+
+class StraightPipeline(Pipeline):
+    """Fastest: query → retrieve → return. No extras."""
+    name = "straight"
+
+    def __init__(self, retriever):
+        super().__init__(retriever)
+
+
+class MultiQueryPipeline(Pipeline):
+    """query → expand → retrieve for each → dedup."""
+    name = "multiquery"
+
+    def __init__(self, retriever, generator, n_variants: int = 3):
+        super().__init__(retriever, multiquery=MultiQuery(generator, n=n_variants))
+
+
+class RerankedPipeline(Pipeline):
+    """query → retrieve → rerank → return top chunks."""
+    name = "reranked"
+
+    def __init__(self, retriever, reranker: Reranker):
+        super().__init__(retriever, reranker=reranker)
+
+
+class HyDEPipeline(Pipeline):
+    """query → hypothesis → retrieve using hypothesis."""
+    name = "hyde"
+
+    def __init__(self, retriever, generator):
+        super().__init__(retriever, hyde=HyDE(generator))
+
+
+class FullPipeline(Pipeline):
+    """query → expand → retrieve → rerank → dedup. Most thorough."""
+    name = "full"
+
+    def __init__(self, retriever, generator, reranker: Reranker, n_variants: int = 3):
+        super().__init__(
+            retriever,
+            multiquery=MultiQuery(generator, n=n_variants),
+            reranker=reranker,
+        )
+
+
+# ─────────────────────────────────────────────────────────────
+# Registry
 # ─────────────────────────────────────────────────────────────
 
 PIPELINE_REGISTRY = {
-    "straight":   StraightPipeline,
+    "straight": StraightPipeline,
     "multiquery": MultiQueryPipeline,
-    "reranked":   RerankedPipeline,
-    "hyde":       HyDEPipeline,
-    "full":       FullPipeline,
+    "reranked": RerankedPipeline,
+    "hyde": HyDEPipeline,
+    "full": FullPipeline,
 }
 
 

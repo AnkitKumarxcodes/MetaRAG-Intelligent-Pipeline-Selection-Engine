@@ -1,389 +1,218 @@
-# retriever.py
+# metarag/core/retriever.py
 
-from __future__ import annotations
-from typing import List, Any, Tuple, Optional
+from abc import ABC, abstractmethod
+from typing import List, Tuple
+import numpy as np
+
+def _chunk_text(chunk) -> str:
+    """Extract text from a chunk — supports Chunk objects or raw strings."""
+    if isinstance(chunk, str):
+        return chunk
+    return getattr(chunk, "text", None) or getattr(chunk, "page_content", "") or str(chunk)
+
+
+class RetrieverInterface(ABC):
+    """
+    Contract for retriever implementations.
+    User can implement their own or use built-ins.
+    """
+    
+    @abstractmethod
+    def retrieve(self, query: str, k: int = 4) -> List[Tuple[str, float]]:
+        """
+        Retrieve top k chunks similar to query.
+        
+        Args:
+            query: query string
+            k: number of results
+        
+        Returns:
+            list of (chunk_text, similarity_score) tuples
+        """
+        pass
 
 
 # ─────────────────────────────────────────────────────────────
-# Base Retriever
+# Retriever 1: BM25 (sparse, keyword-based)
 # ─────────────────────────────────────────────────────────────
 
-class BaseRetriever:
-    """
-    Base class for all MetaRAG retrievers.
-    Every retriever must implement:
-        - retrieve(query)              → List of documents
-        - retrieve_with_score(query)   → List of (document, score) pairs
-    """
-    name: str = "base"
-
-    def retrieve(self, query: str) -> List[Any]:
-        raise NotImplementedError
-
-    def retrieve_with_score(self, query: str) -> List[Tuple[Any, float]]:
-        raise NotImplementedError
-
-    def _check_db(self, db):
-        if db is None:
-            raise ValueError(
-                "Vector DB not initialized. "
-                "Call VectorDB.build() or VectorDB.load() first."
+class BM25Retriever(RetrieverInterface):
+    def __init__(self, chunks: List):
+        try:
+            from rank_bm25 import BM25Okapi
+        except ImportError:
+            raise ImportError(
+                "rank-bm25 required for BM25Retriever. Install: pip install rank-bm25"
             )
 
+        self.chunks = chunks  # original objects (Chunk or str) — kept for return
+        corpus_texts = [_chunk_text(c) for c in chunks]
+        self.corpus = [t.lower().split() for t in corpus_texts]
+        self.bm25 = BM25Okapi(self.corpus)
+
+    def retrieve(self, query: str, k: int = 4) -> List[Tuple]:
+        query_tokens = query.lower().split()
+        scores = self.bm25.get_scores(query_tokens)
+        top_indices = np.argsort(scores)[::-1][:k]
+        return [(self.chunks[i], float(scores[i])) for i in top_indices]  # returns original Chunk objects
+
 
 # ─────────────────────────────────────────────────────────────
-# 1. Dense Retriever
+# Retriever 2: Dense (embedding-based)
 # ─────────────────────────────────────────────────────────────
 
-class DenseRetriever(BaseRetriever):
+# AFTER
+class DenseRetriever(RetrieverInterface):
     """
-    Semantic retrieval using vector similarity.
-    Uses Chroma or FAISS under the hood via VectorDB.
-
-    Best for:
-        - Conceptual / semantic queries
-        - "How does X work?" "Why does Y happen?"
-        - Long, nuanced questions
-
-    Usage:
-        retriever = DenseRetriever(vectordb, k=5)
-        docs      = retriever.retrieve("what is relativity?")
-        scored    = retriever.retrieve_with_score("what is relativity?")
+    Dense embedding-based retriever.
+    Expects vector_db to already be built — this class does NOT build it.
     """
-    name = "dense"
-
-    def __init__(self, vectordb, k: int = 5):
-        self.vectordb = vectordb
-        self.k        = k
-
-    def retrieve(self, query: str) -> List[Any]:
-        self._check_db(self.vectordb.db)
-        return self.vectordb.db.similarity_search(query, k=self.k)
-
-    def retrieve_with_score(self, query: str) -> List[Tuple[Any, float]]:
+    def __init__(self, chunks: List[str], embeddings, vector_db):
         """
-        Returns (document, relevance_score) pairs.
-        Score range: 0.0 (irrelevant) → 1.0 (perfect match)
-        Used by meta-evaluator to compare pipeline confidence.
+        Args:
+            chunks: list of text chunks (for reference only, not re-embedded)
+            embeddings: EmbeddingInterface object (used only for query embedding)
+            vector_db: an ALREADY-BUILT VectorDBInterface instance
         """
-        self._check_db(self.vectordb.db)
-        return self.vectordb.db.similarity_search_with_relevance_scores(
-            query, k=self.k
-        )
+        self.chunks = chunks
+        self.embeddings = embeddings
+        self.vector_db = vector_db
+        # No build() call here — caller is responsible for building once
 
-    def as_langchain_retriever(self):
-        """Return LangChain-compatible retriever interface."""
-        self._check_db(self.vectordb.db)
-        return self.vectordb.db.as_retriever(
-            search_kwargs={"k": self.k}
-        )
-
+    def retrieve(self, query: str, k: int = 4):
+        query_embedding = self.embeddings.embed(query)
+        return self.vector_db.search(query_embedding, k=k)
 
 # ─────────────────────────────────────────────────────────────
-# 2. BM25 Retriever
+# Retriever 3: Hybrid (BM25 + Dense combined)
 # ─────────────────────────────────────────────────────────────
 
-class BM25Retriever(BaseRetriever):
-    """
-    Keyword-based sparse retrieval using BM25 algorithm.
-    No embeddings, no vector DB — pure text matching.
-
-    Best for:
-        - Exact keyword / term queries
-        - Short, specific queries ("error code 404", "version 2.1")
-        - Queries with proper nouns, IDs, codes
-
-    Usage:
-        retriever = BM25Retriever(chunks, k=5)
-        docs      = retriever.retrieve("Einstein relativity 1905")
-    """
-    name = "bm25"
-
-    def __init__(self, chunks: List[Any], k: int = 5):
-        from langchain_community.retrievers import BM25Retriever as LangChainBM25
-
-        texts     = [c.text for c in chunks]
-        metadatas = [getattr(c, "metadata", {}) for c in chunks]
-
-        self.retriever = LangChainBM25.from_texts(
-            texts=texts,
-            metadatas=metadatas,
-        )
-        self.retriever.k = k
-        self.k           = k
-        self._texts      = texts    # kept for score approximation
-
-    def retrieve(self, query: str) -> List[Any]:
-        return self.retriever.invoke(query)
-
-    def retrieve_with_score(self, query: str) -> List[Tuple[Any, float]]:
+class HybridRetriever(RetrieverInterface):
+    def __init__(self, chunks: List[str], embeddings, vector_db, alpha: float = 0.5):
         """
-        BM25 does not natively return normalised scores.
-        We approximate by computing BM25 scores and normalising to [0, 1].
+        Args:
+            vector_db: an ALREADY-BUILT VectorDBInterface instance,
+                       shared with DenseRetriever — not built here.
+
+        NOTE: merge logic below keys on chunk object identity. This is correct
+        ONLY because BM25Retriever and DenseRetriever/vector_db are constructed
+        from the exact same chunk list instance (no copying) — see metarag.py's
+        _setup_retrievers(). If that ever changes, this merge breaks silently.
+
         """
-        from rank_bm25 import BM25Okapi
+        self.bm25 = BM25Retriever(chunks)                       # own index, no embeddings needed
+        self.dense = DenseRetriever(chunks, embeddings, vector_db)  # no longer builds internally
+        self.alpha = alpha
+    
+    def retrieve(self, query: str, k: int = 4) -> List[Tuple[str, float]]:
+        """Hybrid retrieval with interpolation. Guards against empty results from either retriever."""
+        bm25_results = self.bm25.retrieve(query, k=k * 2)
+        dense_results = self.dense.retrieve(query, k=k * 2)
 
-        tokenized   = [t.split() for t in self._texts]
-        bm25        = BM25Okapi(tokenized)
-        raw_scores  = bm25.get_scores(query.split())
+        all_chunks = {}
 
-        max_score   = max(raw_scores) if max(raw_scores) > 0 else 1.0
-        norm_scores = [s / max_score for s in raw_scores]
+        for chunk, score in bm25_results:
+            all_chunks[chunk] = {"bm25": score, "dense": 0}
 
-        docs = self.retrieve(query)
+        for chunk, score in dense_results:
+            if chunk not in all_chunks:
+                all_chunks[chunk] = {"bm25": 0, "dense": 0}
+            all_chunks[chunk]["dense"] = score
 
-        # match docs back to their scores by content
-        score_map = {
-            self._texts[i]: norm_scores[i]
-            for i in range(len(self._texts))
-        }
+        # Guard: if neither retriever returned anything, there's nothing to rank —
+        # return empty instead of crashing on max([]).
+        if not all_chunks:
+            print(f"[HybridRetriever] No results from either BM25 or Dense for query: '{query[:50]}...'")
+            return []
 
-        return [
-            (doc, score_map.get(doc.page_content, 0.0))
-            for doc in docs
-        ]
+        hybrid_scores = {}
 
-    def as_langchain_retriever(self):
-        """Return LangChain-compatible retriever interface."""
-        return self.retriever
+        bm25_scores = [s["bm25"] for s in all_chunks.values()]
+        dense_scores = [s["dense"] for s in all_chunks.values()]
 
+        max_bm25 = max(bm25_scores) or 1   # safe now — bm25_scores is guaranteed non-empty
+        max_dense = max(dense_scores) or 1
 
-# ─────────────────────────────────────────────────────────────
-# 3. Hybrid Retriever (BM25 + Dense)
-# ─────────────────────────────────────────────────────────────
+        for chunk, scores in all_chunks.items():
+            bm25_norm = scores["bm25"] / max_bm25
+            dense_norm = scores["dense"] / max_dense
+            hybrid_scores[chunk] = (1 - self.alpha) * bm25_norm + self.alpha * dense_norm
 
-class HybridRetriever(BaseRetriever):
-    """
-    Combines BM25 sparse retrieval + dense semantic retrieval
-    using LangChain's EnsembleRetriever with weighted scoring.
-
-    alpha controls the balance:
-        alpha = 0.0  →  pure BM25  (keyword-heavy)
-        alpha = 0.5  →  balanced   (default)
-        alpha = 1.0  →  pure dense (semantic-heavy)
-
-    Best for:
-        - General purpose queries
-        - Mixed keyword + conceptual questions
-        - Safe default when query type is unclear
-
-    Usage:
-        retriever = HybridRetriever(vectordb, chunks, k=5, alpha=0.5)
-        docs      = retriever.retrieve("how does relativity affect GPS?")
-    """
-    name = "hybrid"
-
-    def __init__(
-        self,
-        vectordb,
-        chunks: List[Any],
-        k: int = 5,
-        alpha: float = 0.5,
-    ):
-        from langchain.retrievers import EnsembleRetriever
-        from langchain_community.retrievers import BM25Retriever as LangChainBM25
-
-        self.vectordb = vectordb
-        self.k        = k
-        self.alpha    = alpha
-        self._chunks  = chunks
-
-        texts     = [c.text for c in chunks]
-        metadatas = [getattr(c, "metadata", {}) for c in chunks]
-
-        # BM25 leg
-        bm25_retriever   = LangChainBM25.from_texts(texts=texts, metadatas=metadatas)
-        bm25_retriever.k = k
-
-        # Dense leg
-        self._check_db(vectordb.db)
-        dense_retriever = vectordb.db.as_retriever(search_kwargs={"k": k})
-
-        # Ensemble — weights must sum to 1.0
-        self.retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, dense_retriever],
-            weights=[round(1 - alpha, 2), round(alpha, 2)],
-        )
-
-    def retrieve(self, query: str) -> List[Any]:
-        return self.retriever.invoke(query)
-
-    def retrieve_with_score(self, query: str) -> List[Tuple[Any, float]]:
-        """
-        Hybrid score = weighted average of BM25 + dense scores.
-        """
-        from rank_bm25 import BM25Okapi
-
-        texts = [c.text for c in self._chunks]
-
-        # BM25 scores — normalised
-        tokenized  = [t.split() for t in texts]
-        bm25       = BM25Okapi(tokenized)
-        bm25_raw   = bm25.get_scores(query.split())
-        max_bm25   = max(bm25_raw) if max(bm25_raw) > 0 else 1.0
-        bm25_norm  = [s / max_bm25 for s in bm25_raw]
-
-        # Dense scores
-        dense_results = self.vectordb.db.similarity_search_with_relevance_scores(
-            query, k=len(texts)
-        )
-        dense_map = {doc.page_content: score for doc, score in dense_results}
-
-        # Combine
-        combined = []
-        for i, text in enumerate(texts):
-            dense_score  = dense_map.get(text, 0.0)
-            hybrid_score = (1 - self.alpha) * bm25_norm[i] + self.alpha * dense_score
-            combined.append((text, hybrid_score))
-
-        combined.sort(key=lambda x: x[1], reverse=True)
-        top_texts = [t for t, _ in combined[: self.k]]
-        score_map = {t: s for t, s in combined}
-
-        docs = self.retrieve(query)
-        return [
-            (doc, score_map.get(doc.page_content, 0.0))
-            for doc in docs
-        ]
-
-    def as_langchain_retriever(self):
-        return self.retriever
+        sorted_results = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)[:k]
+        return sorted_results
 
 
 # ─────────────────────────────────────────────────────────────
-# 4. MMR Retriever
+# Retriever 4: MMR (Maximal Marginal Relevance)
 # ─────────────────────────────────────────────────────────────
 
-class MMRRetriever(BaseRetriever):
+class MMRRetriever(RetrieverInterface):
     """
-    Maximal Marginal Relevance retrieval.
-    Balances relevance with diversity — avoids returning
-    redundant chunks that say the same thing.
+    Maximal Marginal Relevance retriever.
+    Balances relevance + diversity.
+    Hand-coded (no sklearn dependency).
 
-    diversity controls the balance:
-        diversity = 0.0  →  pure similarity (like dense)
-        diversity = 0.5  →  balanced        (default)
-        diversity = 1.0  →  maximum diversity
-
-    Best for:
-        - Long documents with repeated content
-        - Summarisation tasks
-        - When top-k chunks tend to be near-duplicates
-
-    Usage:
-        retriever = MMRRetriever(vectordb, k=5, diversity=0.5)
-        docs      = retriever.retrieve("summarise the key points")
+    Computes similarity directly against its own local embeddings —
+    does NOT go through vector_db.search(), so there's no text-based
+    index lookup and no risk of duplicate-chunk-text bugs.
     """
-    name = "mmr"
 
-    def __init__(self, vectordb, k: int = 5, diversity: float = 0.5):
-        self.vectordb  = vectordb
-        self.k         = k
-        self.diversity = diversity
+    def __init__(self, chunks: List, embeddings, vector_db, lambda_param: float = 0.6):
+        self.chunks = chunks
+        self.embeddings = embeddings
+        self.vector_db = vector_db
+        self.lambda_param = lambda_param
 
-    def retrieve(self, query: str) -> List[Any]:
-        self._check_db(self.vectordb.db)
-        return self.vectordb.db.max_marginal_relevance_search(
-            query,
-            k=self.k,
-            fetch_k=self.k * 3,     # fetch more, then diversify
-            lambda_mult=self.diversity,
-        )
+        chunk_texts = [_chunk_text(c) for c in chunks]           # ← new: extract text first
+        chunk_embeddings = embeddings.embed_documents(chunk_texts)  # ← embed text, not Chunk objects
+        self.chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
 
-    def retrieve_with_score(self, query: str) -> List[Tuple[Any, float]]:
-        """
-        MMR does not natively return scores.
-        We retrieve via MMR then score each result via similarity.
-        """
-        self._check_db(self.vectordb.db)
-        docs = self.retrieve(query)
+        norms = np.linalg.norm(self.chunk_embeddings, axis=1)
+        self._norms = np.where(norms == 0, 1e-8, norms)
 
-        # score each MMR result via similarity search
-        all_scored = self.vectordb.db.similarity_search_with_relevance_scores(
-            query, k=self.k * 3
-        )
-        score_map = {doc.page_content: score for doc, score in all_scored}
+    def retrieve(self, query: str, k: int = 4) -> List[Tuple[str, float]]:
+        """MMR retrieval — pure local computation, index-safe by construction."""
+        query_embedding = np.array(self.embeddings.embed(query), dtype=np.float32)
+        query_norm = np.linalg.norm(query_embedding)
+        query_norm = query_norm if query_norm != 0 else 1e-8
 
-        return [
-            (doc, score_map.get(doc.page_content, 0.0))
-            for doc in docs
-        ]
+        # Step 1: relevance of every chunk to the query (vectorized)
+        relevance_scores = (self.chunk_embeddings @ query_embedding) / (self._norms * query_norm)
 
-    def as_langchain_retriever(self):
-        self._check_db(self.vectordb.db)
-        return self.vectordb.db.as_retriever(
-            search_type="mmr",
-            search_kwargs={
-                "k":            self.k,
-                "fetch_k":      self.k * 3,
-                "lambda_mult":  self.diversity,
-            },
-        )
+        # Step 2: candidate pool = top 2k by relevance, as indices directly — no text matching
+        candidate_size = min(k * 2, len(self.chunks))
+        candidate_indices = list(np.argsort(relevance_scores)[::-1][:candidate_size])
+
+        # Step 3: MMR greedy selection over indices
+        selected: List[int] = []
+        remaining = set(candidate_indices)
+
+        while len(selected) < k and remaining:
+            best_idx, best_score = None, -float("inf")
+
+            for idx in remaining:
+                rel_score = float(relevance_scores[idx])
+
+                if selected:
+                    sim_to_selected = [
+                        float(np.dot(self.chunk_embeddings[idx], self.chunk_embeddings[s]))
+                        / (self._norms[idx] * self._norms[s])
+                        for s in selected
+                    ]
+                    max_similarity = max(sim_to_selected)
+                else:
+                    max_similarity = 0.0
+
+                mmr_score = self.lambda_param * rel_score - (1 - self.lambda_param) * max_similarity
+
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = idx
+
+            selected.append(best_idx)
+            remaining.remove(best_idx)
+
+        # Step 4: return REAL relevance scores, not a flat 1.0 placeholder
+        return [(self.chunks[idx], float(relevance_scores[idx])) for idx in selected]
 
 
-# ─────────────────────────────────────────────────────────────
-# Factory
-# ─────────────────────────────────────────────────────────────
-
-RETRIEVER_REGISTRY = {
-    "dense":  DenseRetriever,
-    "bm25":   BM25Retriever,
-    "hybrid": HybridRetriever,
-    "mmr":    MMRRetriever,
-}
-
-
-def get_retriever(
-    retriever_type: str,
-    vectordb=None,
-    chunks: Optional[List[Any]] = None,
-    k: int = 5,
-    **kwargs,
-) -> BaseRetriever:
-    """
-    Factory function to get any retriever by name.
-
-    Args:
-        retriever_type : "dense" | "bm25" | "hybrid" | "mmr"
-        vectordb       : VectorDB instance (required for dense, hybrid, mmr)
-        chunks         : List of Chunk objects (required for bm25, hybrid)
-        k              : Number of results to retrieve
-        **kwargs       : Extra args passed to retriever (alpha, diversity, etc.)
-
-    Returns:
-        Instantiated retriever ready to use.
-
-    Usage:
-        r = get_retriever("hybrid", vectordb=db, chunks=chunks, k=5, alpha=0.6)
-        docs = r.retrieve("what is relativity?")
-    """
-    retriever_type = retriever_type.lower()
-
-    if retriever_type not in RETRIEVER_REGISTRY:
-        raise ValueError(
-            f"Unknown retriever '{retriever_type}'. "
-            f"Choose from: {list(RETRIEVER_REGISTRY.keys())}"
-        )
-
-    # validate required args per type
-    if retriever_type in ("dense", "mmr") and vectordb is None:
-        raise ValueError(f"'{retriever_type}' retriever requires a vectordb.")
-
-    if retriever_type == "bm25" and chunks is None:
-        raise ValueError("'bm25' retriever requires chunks.")
-
-    if retriever_type == "hybrid" and (vectordb is None or chunks is None):
-        raise ValueError("'hybrid' retriever requires both vectordb and chunks.")
-
-    # build args per retriever type
-    if retriever_type == "dense":
-        return DenseRetriever(vectordb, k=k)
-
-    elif retriever_type == "bm25":
-        return BM25Retriever(chunks, k=k)
-
-    elif retriever_type == "hybrid":
-        return HybridRetriever(vectordb, chunks, k=k, **kwargs)
-
-    elif retriever_type == "mmr":
-        return MMRRetriever(vectordb, k=k, **kwargs)

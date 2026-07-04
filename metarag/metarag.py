@@ -1,80 +1,65 @@
+# metarag/metarag.py
+
 """
-MetaRAG v0.2 — Intelligent Pipeline Selection Engine
+MetaRAG v0.2 — Intelligent Pipeline Selection Engine for RAG
 
-Core Philosophy:
-- Framework, not product. Users own their router, their metrics, their optimization.
-- LearnedRuleRouter learns thresholds from benchmark data (no black-box ML).
-- Every method is measurable. Every output is explorable.
+Public API (12 methods):
+  fit() — load docs, chunk, embed, index, build pipelines
+  ask() — retrieve + generate with learned router
+  benchmark() — evaluate all pipelines, train router
+  save() / load() — persist state
+  status() — show project status
+  leaderboard() — pipeline rankings
+  analyze_query() — diagnose query
+  analyze_corpus() — diagnose corpus
+  explain() — transparent routing decision
+  get_benchmark_data() — access benchmark CSV
+  get_router_thresholds() — inspect router
+  set_llm() / set_embeddings() / rebuild() — reconfigure
 
-Usage:
-    from langchain_ollama import OllamaEmbeddings, ChatOllama
-    from metarag import MetaRAG
-
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
-    llm = ChatOllama(model="mistral", temperature=0)
-
-    rag = MetaRAG(docs="./docs", embeddings=embeddings, llm=llm)
-    rag.fit()
-    
-    # v0.2: Generate benchmark + train router
-    rag.benchmark(num_queries=100)
-    
-    # Ask uses learned router
-    answer = rag.ask("what is the policy?")
-    print(answer)
+Internal (private, not exposed):
+  _setup_* methods
+  _extract_* methods
+  _train_* methods
+  _write_log / _read_logs
 """
 
 from __future__ import annotations
 import os
-import sys
 import json
 import time
 import pandas as pd
-from typing import Union, List, Optional, Dict, Any
+from typing import Union, List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
 # ─────────────────────────────────────────────────────────────
-# DATA STRUCTURES
+# Answer (public return type)
 # ─────────────────────────────────────────────────────────────
 
 @dataclass
 class Answer:
-    """Answer returned by ask()"""
+    """Answer returned by ask()."""
     text: str
     query: str
     pipeline: str
-    chunks: list
+    chunks: List[Tuple[str, float]]  # (text, similarity_score)
     score: float
     latency_ms: float
-    features: dict = field(default_factory=dict)
-
+    sources: List[str] = field(default_factory=list)
+    
     def __repr__(self):
         return (
-            f"\n{'='*55}\n"
+            f"\n{'='*60}\n"
             f"  Query    : {self.query}\n"
             f"  Pipeline : {self.pipeline}\n"
             f"  Score    : {self.score:.2f}\n"
             f"  Latency  : {self.latency_ms:.0f}ms\n"
-            f"{'─'*55}\n"
-            f"  {self.text}\n"
-            f"{'='*55}"
+            f"{'─'*60}\n"
+            f"  {self.text[:200]}...\n"
+            f"{'='*60}"
         )
-
-
-@dataclass
-class BenchmarkRow:
-    """Single row in benchmark CSV"""
-    query: str
-    pipeline: str
-    faithfulness: float
-    relevancy: float
-    precision: float
-    coverage: float
-    redundancy: float
-    composite: float
-    latency_ms: float
 
 
 # ─────────────────────────────────────────────────────────────
@@ -85,584 +70,824 @@ class MetaRAG:
     """
     MetaRAG v0.2 — Intelligent Pipeline Selection Engine
     
-    Infrastructure for building domain-optimized RAG systems.
-    Benchmarks pipelines on your data, learns routing thresholds.
+    Interface-based framework: user brings embeddings/LLM, 
+    MetaRAG orchestrates retrieval, generation, evaluation, routing.
     """
-
+    
     VERSION = "0.2.0"
-
+    
     def __init__(
         self,
         docs: Union[str, List[str]],
         embeddings,
-        llm,
+        generator,
         project: str = "default",
+        vector_db = None,
         chunk_size: int = 500,
+        chunk_overlap: int = 50,
+        chunk_strategy: str = "recursive",
         k: int = 4,
         eval_preset: str = "balanced",
         verbose: bool = True,
     ):
-        """Initialize MetaRAG project."""
-        if embeddings is None:
-            raise ValueError("embeddings required. See docs.")
-        if llm is None:
-            raise ValueError("llm required. See docs.")
-
+        """
+        Initialize MetaRAG.
+        
+        Args:
+            docs: path(s) to documents
+            embeddings: object with .embed(text) method (EmbeddingInterface)
+            generator: object with .generate(prompt) method (GeneratorInterface)
+            project: project name (for storage)
+            vector_db: VectorDBInterface object (default: InMemoryVectorDB)
+            chunk_size: chunk size in chars
+            chunk_overlap: overlap in chars
+            chunk_strategy: "fixed", "recursive", "semantic", "sentence", etc.
+            k: retrieve k chunks
+            eval_preset: "balanced", "precision", "recall"
+            verbose: print logs
+        """
+        # Validate user inputs
+        if not hasattr(embeddings, "embed"):
+            raise TypeError("embeddings must have .embed(text) method")
+        if not hasattr(generator, "generate"):
+            raise TypeError("generator must have .generate(prompt) method")
+        
+        # Config
         self.docs_path = docs
         self.embeddings = embeddings
-        self.llm = llm
+        self.generator = generator
         self.project = project
         self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.chunk_strategy = chunk_strategy
         self.k = k
         self.eval_preset = eval_preset
         self.verbose = verbose
-
+        
         # Storage paths
-        self._base = os.path.join(".metarag", project)
-        self._index_dir = os.path.join(self._base, "index")
-        self._cache_dir = os.path.join(self._base, "cache")
-        self._logs_dir = os.path.join(self._base, "logs")
-        self._profile_path = os.path.join(self._base, "corpus_profile.json")
-        self._benchmark_path = os.path.join(self._base, "benchmark.csv")
-        self._router_path = os.path.join(self._base, "router_thresholds.json")
-        self._log_path = os.path.join(self._logs_dir, "queries.jsonl")
-
+        self._base = f".metarag/{project}"
+        self._index_dir = f"{self._base}/index"
+        self._cache_dir = f"{self._base}/cache"
+        self._logs_dir = f"{self._base}/logs"
+        self._profile_path = f"{self._base}/corpus_profile.json"
+        self._benchmark_path = f"{self._base}/benchmark.csv"
+        self._router_path = f"{self._base}/router_thresholds.json"
+        self._log_path = f"{self._logs_dir}/queries.jsonl"
+        self._config_path = f"{self._base}/config.json"
+        
         for d in [self._index_dir, self._cache_dir, self._logs_dir]:
             os.makedirs(d, exist_ok=True)
-
+        
+        # Vector DB (default: InMemory, user can override)
+        if vector_db is None:
+            from .core.vector_db import InMemoryVectorDB
+            self.vector_db = InMemoryVectorDB()
+        else:
+            self.vector_db = vector_db
+        
         # Internal state
-        self._db = None
         self._chunks = None
         self._corpus_profile = None
-        self._pipelines = None
-        self._router = None
-        self._learned_router = None
-        self._generator = None
+        self._retrievers = {}  # registry of built retrievers
+        self._pipelines = {}
         self._evaluator = None
+        self._router = None
         self._fitted = False
-
+        self._query_logs = []
+        
         self._log(f"MetaRAG v{self.VERSION} — project='{project}'")
-
+    
+    # ═════════════════════════════════════════════════════════
+    # PUBLIC API (12 methods)
+    # ═════════════════════════════════════════════════════════
+    
     # ─────────────────────────────────────────────────────────
-    # CORE: FIT
+    # 1. fit()
     # ─────────────────────────────────────────────────────────
-
+    
     def fit(self, force: bool = False) -> "MetaRAG":
         """
-        Load documents → chunk → index → profile → ready.
-
+        Load documents → chunk → embed → index → build pipelines.
+        
         Args:
-            force: rebuild everything from scratch
+            force: if True, rebuild everything from scratch
+        
+        Returns:
+            self (for chaining)
         """
         t0 = time.time()
         self._log("fit() starting...")
-
-        self._load_docs_and_index(force=force)
-        self._load_corpus_profile(force=force)
-        self._setup_pipelines()
-        self._setup_router()
-        self._setup_generator()
+        
+        self._load_docs_and_chunk(force=force)
+        self._build_vector_index(force=force)
+        self._build_corpus_profile(force=force)
+        self._setup_retrievers()
         self._setup_evaluator()
-
+        self._setup_pipelines()
+        
         self._fitted = True
         elapsed = round((time.time() - t0) * 1000)
-        self._log(f"fit() done in {elapsed}ms — ready.")
+        self._log(f"fit() done in {elapsed}ms — ready to ask()")
         return self
-
+    
     # ─────────────────────────────────────────────────────────
-    # CORE: ASK (inference)
+    # 2. ask()
     # ─────────────────────────────────────────────────────────
-
+    
     def ask(self, query: str) -> Answer:
         """
-        Ask a question. Router picks best pipeline. Returns Answer.
-
+        Ask a question. Router selects best pipeline. Returns Answer.
+        
         Args:
-            query: your question string
-
+            query: question string
+        
         Returns:
-            Answer with .text .pipeline .score .chunks .latency_ms
+            Answer with .text .pipeline .score .chunks .sources
         """
         self._check_fitted()
         t0 = time.time()
-
-        # Route: use learned router if trained, else fallback
-        if self._learned_router and self._learned_router.is_trained:
+        
+        # Route: use learned router if trained, else default to hybrid
+        # AFTER
+        if self._router is not None:
             features = self._extract_query_features(query)
-            pipeline_name = self._learned_router.route(features)
-            explanation = self._learned_router.explain(pipeline_name)
-            self._log(f"Router: {explanation}")
+            pipeline_name = self._router.route(features)
+            explanation = (
+                self._router.explain(pipeline_name)
+                if hasattr(self._router, "explain")
+                else f"selected by {self._router.__class__.__name__}"
+            )
+            confidence = self._router.__class__.__name__
         else:
-            decision = self._router.route(query)
-            pipeline_name = decision["pipeline"]
-            features = decision["features"]
-
+            pipeline_name = "hybrid"
+            explanation = "default (no router configured)"
+            confidence = "default"
+        
         # Run pipeline
-        result = self._pipelines[pipeline_name].run(query)
-        chunks = result["chunks"]
-
+        pipeline = self._pipelines.get(pipeline_name, self._pipelines["hybrid"])
+        pipeline_result = pipeline.run(query, k=self.k)
+        chunks = pipeline_result["chunks"]  # List[(text, score)] tuples
+        
+        # Extract chunk texts for generation
+        chunk_texts = [chunk[0] if isinstance(chunk, tuple) else str(chunk) for chunk in chunks]
+        
         # Generate answer
-        gen_answer = self._generator.generate(
-            query=query,
-            chunks=chunks,
-            pipeline=pipeline_name,
-        )
+        answer_text, gen_latency_ms = self._generator_wrapper.generate_text(query, chunk_texts)
+        
+        # Extract sources (metadata from chunks if available)
+        sources = []
+        for chunk in chunks:  # chunks are (Chunk_or_str, score) tuples
+            chunk_obj = chunk[0] if isinstance(chunk, tuple) else chunk
+            if hasattr(chunk_obj, "metadata"):
+                sources.append(chunk_obj.metadata.get("source", "unknown"))
+            else:
+                sources.append(str(chunk_obj)[:50])
+        
+        elapsed = round((time.time() - t0) * 1000, 2)
 
-        # Evaluate
-        score = self._evaluator.evaluate(gen_answer)
-
-        # Create answer
         answer = Answer(
-            text=gen_answer.text,
+            text=answer_text,
             query=query,
             pipeline=pipeline_name,
             chunks=chunks,
-            score=score.composite,
-            latency_ms=round((time.time() - t0) * 1000, 2),
-            features=features if not self._learned_router.is_trained else {},
+            score=0.0,          # placeholder, set below
+            latency_ms=elapsed,
+            sources=sources[:3],
         )
 
-        self._write_log(answer, score)
+        score_result = self._evaluator.evaluate(answer)   # Evaluator reads answer.query/.text/.chunks/.latency_ms
+        answer.score = score_result.composite             # now fill in the real score
+
+        self._write_log(answer)
+        score = answer
         return answer
-
     # ─────────────────────────────────────────────────────────
-    # v0.2: BENCHMARK
+    # 3. benchmark()
     # ─────────────────────────────────────────────────────────
-
+    
     def benchmark(
         self,
-        num_queries: int = 100,
-        auto_generate: bool = True,
-        queries: Optional[List[str]] = None,
+        queries: List[str],
+        retrieval_only: bool = False,
+        train_router: bool = True,
+        save_csv: bool = True,
     ) -> pd.DataFrame:
         """
-        Run all pipelines on benchmark queries. Generate labels. Train router.
-
-        This is the core v0.2 feature: user provides queries (or we generate them),
-        we run all pipelines, evaluate, and learn thresholds.
-
+        Run all pipelines on queries. Generate labels. Train router.
+        
         Args:
-            num_queries: if auto_generate=True, generate N queries
-            auto_generate: if True, use LLM to generate queries from docs
-            queries: if provided, use these queries instead
-
+            queries: list of test queries
+            retrieval_only: if True, skip generation/evaluation
+            train_router: if True, train LearnedRuleRouter after
+            save_csv: if True, save to benchmark.csv
+        
         Returns:
             benchmark_df (DataFrame with all results)
         """
         self._check_fitted()
         t0 = time.time()
-
-        self._log(f"benchmark() starting...")
-
-        # Step 1: Get queries
-        if queries:
-            queries_to_run = queries
-        elif auto_generate:
-            queries_to_run = self._generate_queries(num_queries)
-        else:
-            raise ValueError(
-                "Must provide queries or set auto_generate=True"
-            )
-
-        self._log(f"Benchmarking on {len(queries_to_run)} queries...")
-
-        # Step 2: Run all pipelines on all queries
+        
+        self._log(f"benchmark() starting on {len(queries)} queries...")
+        
         results = []
-        for i, query in enumerate(queries_to_run):
-            self._log(f"  [{i+1}/{len(queries_to_run)}] {query[:50]}...")
-
+        
+        for i, query in enumerate(queries):
+            self._log(f"  [{i+1}/{len(queries)}] {query[:50]}...")
+            
+            pipeline_scores = {}
+            query_results = []
+            
+            # Run all pipelines
             for pipeline_name, pipeline in self._pipelines.items():
-                # Run pipeline
-                result = pipeline.run(query)
-                chunks = result["chunks"]
-
-                # Generate answer
-                gen_answer = self._generator.generate(
-                    query=query,
-                    chunks=chunks,
-                    pipeline=pipeline_name,
-                )
-
-                # Evaluate
-                score = self._evaluator.evaluate(gen_answer)
-
-                # Extract features (corpus + query profiles)
-                features = self._extract_query_features(query)
-
-                # Determine winner (which pipeline scored highest)
-                winning_pipeline = max(
-                    [(p, self._evaluator.evaluate(
-                        self._generator.generate(
-                            query, self._pipelines[p].run(query)["chunks"], p
-                        )
-                    ).composite) for p in self._pipelines.keys()],
-                    key=lambda x: x[1]
-                )[0]
-
-                # Log row
-                row = {
-                    "query": query,
-                    "pipeline": pipeline_name,
-                    "faithfulness": score.faithfulness,
-                    "relevancy": score.relevancy,
-                    "precision": score.precision_avg,
-                    "coverage": score.coverage,
-                    "redundancy": score.redundancy,
-                    "composite": score.composite,
-                    "latency_ms": result.get("latency_ms", 0),
-                    "winning_pipeline": winning_pipeline,
-                    **features,
-                }
-                results.append(row)
-
-        # Step 3: Save benchmark CSV
+                pipeline_result = pipeline.run(query, k=self.k)
+                chunks = pipeline_result["chunks"]
+                chunk_texts = [c[0] if isinstance(c, tuple) else str(c) for c in chunks]
+                
+                if retrieval_only:
+                    row = {
+                        "query": query,
+                        "pipeline": pipeline_name,
+                        "chunks_retrieved": len(chunks),
+                    }
+                    query_results.append(row)
+                else:
+                    # Generate + evaluate
+                    answer_text, _ = self._generator_wrapper.generate_text(query, chunk_texts)
+                    temp_answer = Answer(
+                        text=answer_text, query=query, pipeline=pipeline_name,
+                        chunks=chunk_texts, score=0.0, latency_ms=0.0,
+                    )
+                    score_result = self._evaluator.evaluate(temp_answer)
+                    pipeline_scores[pipeline_name] = score_result.composite
+                    
+                    row = {
+                        "query": query,
+                        "pipeline": pipeline_name,
+                        "composite" : score_result.composite,
+                    }
+                    query_results.append(row)
+            
+            # Add winning pipeline
+            if not retrieval_only and pipeline_scores:
+                winning_pipeline = max(pipeline_scores, key=pipeline_scores.get)
+                for row in query_results:
+                    row["winning_pipeline"] = winning_pipeline
+            
+            results.extend(query_results)
+        
+        # Save CSV
         benchmark_df = pd.DataFrame(results)
-        benchmark_df.to_csv(self._benchmark_path, index=False)
-        self._log(f"Benchmark CSV saved: {self._benchmark_path}")
-
-        # Step 4: Train learned router
-        self._train_learned_router(benchmark_df)
-
+        if save_csv:
+            benchmark_df.to_csv(self._benchmark_path, index=False)
+            self._log(f"Benchmark CSV saved: {self._benchmark_path}")
+        
+        # Train router
+        if not retrieval_only and train_router:
+            self._train_learned_router(benchmark_df)
+        
         elapsed = round((time.time() - t0) * 1000)
         self._log(f"benchmark() done in {elapsed}ms")
-
+        
         return benchmark_df
-
+    
     # ─────────────────────────────────────────────────────────
-    # v0.2: ROUTER TRAINING
+    # 4. status()
     # ─────────────────────────────────────────────────────────
-
-    def _train_learned_router(self, benchmark_df: pd.DataFrame):
-        """Train LearnedRuleRouter from benchmark data."""
-        from .router.learned_rule_router import LearnedRuleRouter
-
-        self._learned_router = LearnedRuleRouter(self._base)
-        self._learned_router.train(benchmark_df)
-
-    def set_custom_router(self, model):
-        """
-        User plugs in their own router model.
-        
-        Expected interface:
-            model.predict(features_dict) -> pipeline_name
-        
-        Args:
-            model: any object with .predict(features_dict) method
-        """
-        self._custom_router = model
-        self._log("Custom router set")
-
-    # ─────────────────────────────────────────────────────────
-    # v0.2: DATA ACCESS
-    # ─────────────────────────────────────────────────────────
-
-    def get_benchmark_data(self) -> pd.DataFrame:
-        """
-        Return benchmark CSV as DataFrame.
-
-        Users can use this to train their own models:
-            df = rag.get_benchmark_data()
-            X = df[[feature_cols]]
-            y = df['winning_pipeline']
-            model.fit(X, y)
-        """
-        if not os.path.exists(self._benchmark_path):
-            raise FileNotFoundError(
-                f"Benchmark CSV not found. Run benchmark() first."
-            )
-        return pd.read_csv(self._benchmark_path)
-
-    def get_router_thresholds(self) -> Dict[str, Any]:
-        """Return learned router thresholds (for inspection)."""
-        if self._learned_router is None:
-            return {}
-        return self._learned_router.get_thresholds()
-
-    # ─────────────────────────────────────────────────────────
-    # OBSERVABILITY: STATUS
-    # ─────────────────────────────────────────────────────────
-
+    
     def status(self):
         """Print current state of this MetaRAG project."""
         logs = self._read_logs()
         n_logs = len(logs)
         avg_score = (
-            round(sum(r["score"] for r in logs) / n_logs, 3)
+            round(sum(r.get("score", 0) for r in logs) / n_logs, 3)
             if logs
             else 0
         )
-
+        
         router_status = "learned" if (
             self._learned_router and self._learned_router.is_trained
-        ) else "rule-based"
-
-        print(f"\n{'='*50}")
+        ) else "default"
+        
+        print(f"\n{'='*60}")
         print(f"  MetaRAG v{self.VERSION} — '{self.project}'")
-        print(f"{'='*50}")
+        print(f"{'='*60}")
         print(f"  Fitted        : {'✅' if self._fitted else '❌'}")
         print(f"  Chunks        : {len(self._chunks) if self._chunks else 0}")
         print(f"  Chunk size    : {self.chunk_size}")
-        print(f"  k             : {self.k}")
+        print(f"  Chunk overlap : {self.chunk_overlap}")
+        print(f"  k (retrieve)  : {self.k}")
         print(f"  Eval preset   : {self.eval_preset}")
-        print(f"  Queries logged: {n_logs}")
+        print(f"  Pipelines     : {len(self._pipelines)}")
+        print(f"  Queries asked : {len(logs)}")
         print(f"  Avg score     : {avg_score}")
         print(f"  Router        : {router_status}")
         print(f"  Storage       : {self._base}/")
-        print(f"{'='*50}\n")
-
+        print(f"{'='*60}\n")
+    
+    # ─────────────────────────────────────────────────────────
+    # 5. leaderboard()
+    # ─────────────────────────────────────────────────────────
+    
     def leaderboard(self):
         """Show pipeline performance from logged queries."""
         logs = self._read_logs()
-
+        
         if not logs:
             print("[MetaRAG] No queries logged yet. Run ask() first.")
             return
-
+        
         from collections import defaultdict
-
+        
         pipe_scores = defaultdict(list)
         for row in logs:
-            pipe_scores[row["pipeline"]].append(row["score"])
-
+            pipeline = row.get("pipeline", "unknown")
+            score = row.get("score", 0)
+            pipe_scores[pipeline].append(score)
+        
         ranked = sorted(
             pipe_scores.items(),
             key=lambda x: sum(x[1]) / len(x[1]),
             reverse=True,
         )
-
-        print(f"\n{'='*50}")
+        
+        print(f"\n{'='*60}")
         print(f"  Leaderboard — {len(logs)} queries")
-        print(f"{'='*50}")
-        print(f"{'Pipeline':<14} {'Queries':>8} {'Avg':>7} {'Best':>7}")
-        print(f"{'─'*50}")
-
+        print(f"{'='*60}")
+        print(f"{'Pipeline':<15} {'Queries':>8} {'Avg':>7} {'Max':>7}")
+        print(f"{'─'*60}")
+        
         for i, (name, scores) in enumerate(ranked):
             avg = round(sum(scores) / len(scores), 3)
-            best = round(max(scores), 3)
+            max_score = round(max(scores), 3)
             medal = ["🥇", "🥈", "🥉"][i] if i < 3 else "  "
-            print(
-                f"{medal} {name:<12} {len(scores):>8} "
-                f"{avg:>7.3f} {best:>7.3f}"
-            )
-
-        print(f"{'='*50}\n")
-
+            print(f"{medal} {name:<13} {len(scores):>8} {avg:>7.3f} {max_score:>7.3f}")
+        
+        print(f"{'='*60}\n")
+    
     # ─────────────────────────────────────────────────────────
-    # SAVE / LOAD
+    # 6. analyze_query()
     # ─────────────────────────────────────────────────────────
-
+    
+    def analyze_query(self, query: str) -> Dict[str, Any]:
+        """
+        Diagnose query: length, complexity, keywords, expected pipeline.
+        
+        Args:
+            query: query string
+        
+        Returns:
+            dict with analysis
+        """
+        words = query.lower().split()
+        
+        # Simple complexity heuristic
+        avg_word_len = sum(len(w) for w in words) / len(words) if words else 0
+        complexity = "high" if avg_word_len > 6 else "medium" if avg_word_len > 4 else "low"
+        
+        # Extract keywords (no stopwords)
+        stopwords = {"the", "a", "an", "and", "or", "is", "was", "what", "how", "why"}
+        keywords = [w for w in words if w not in stopwords and len(w) > 3]
+        
+        # Suggest pipeline based on complexity
+        if len(keywords) > 5:
+            expected = "multiquery"
+        elif avg_word_len > 6:
+            expected = "hybrid"
+        else:
+            expected = "dense"
+        
+        return {
+            "query": query,
+            "length": len(query),
+            "words": len(words),
+            "avg_word_length": round(avg_word_len, 2),
+            "complexity": complexity,
+            "keywords": keywords[:5],
+            "num_keywords": len(keywords),
+            "expected_pipeline": expected,
+        }
+    
+    # ─────────────────────────────────────────────────────────
+    # 7. analyze_corpus()
+    # ─────────────────────────────────────────────────────────
+    
+    def analyze_corpus(self) -> Dict[str, Any]:
+        """
+        Diagnose corpus: size, duplicates, stats.
+        
+        Returns:
+            dict with analysis
+        """
+        if not self._chunks:
+            return {"status": "not fitted"}
+        
+        total_chars = sum(len(chunk.text if hasattr(chunk, "text") else str(chunk)) for chunk in self._chunks)
+        avg_chunk = total_chars / len(self._chunks) if self._chunks else 0
+        
+        # Simple duplicate detection (word overlap)
+        texts = [
+            chunk.text if hasattr(chunk, "text") else str(chunk) 
+            for chunk in self._chunks
+        ]
+        
+        duplicates = 0
+        for i, t1 in enumerate(texts):
+            for t2 in texts[i+1:]:
+                overlap = len(set(t1.split()) & set(t2.split()))
+                if overlap > len(set(t1.split())) * 0.8:
+                    duplicates += 1
+                    break
+        
+        return {
+            "num_documents": len(self._chunks),
+            "total_characters": total_chars,
+            "avg_chunk_size": round(avg_chunk, 0),
+            "min_chunk_size": min(len(texts), default=0),
+            "max_chunk_size": max(len(texts), default=0),
+            "estimated_duplicates": duplicates,
+            "corpus_profile": self._corpus_profile,
+        }
+    
+    # ─────────────────────────────────────────────────────────
+    # 8. explain()
+    # ─────────────────────────────────────────────────────────
+    
+    def explain(self, query: str) -> Dict[str, Any]:
+        """
+        Transparent explanation of routing decision for a query.
+        
+        Args:
+            query: query string
+        
+        Returns:
+            dict with routing explanation
+        """
+        self._check_fitted()
+        
+        # Get routing decision
+        if self._learned_router and self._learned_router.is_trained:
+            features = self._extract_query_features(query)
+            pipeline_name = self._learned_router.route(features)
+            explanation = self._learned_router.explain(pipeline_name)
+            confidence = "learned"
+        else:
+            pipeline_name = "hybrid"
+            explanation = "default (router not yet trained)"
+            confidence = "default"
+        
+        # Get query analysis
+        query_analysis = self.analyze_query(query)
+        
+        return {
+            "query": query,
+            "selected_pipeline": pipeline_name,
+            "confidence": confidence,
+            "explanation": explanation,
+            "query_analysis": query_analysis,
+            "available_pipelines": list(self._pipelines.keys()),
+        }
+    
+    # ─────────────────────────────────────────────────────────
+    # 9. save()
+    # ─────────────────────────────────────────────────────────
+    
     def save(self) -> "MetaRAG":
-        """Save config to .metarag/<project>/config.json"""
-        path = os.path.join(self._base, "config.json")
+        """Save config, router state, benchmark data."""
         config = {
             "version": self.VERSION,
             "project": self.project,
             "chunk_size": self.chunk_size,
+            "chunk_overlap": self.chunk_overlap,
+            "chunk_strategy": self.chunk_strategy,
             "k": self.k,
             "eval_preset": self.eval_preset,
-            "docs_path": (
-                self.docs_path
-                if isinstance(self.docs_path, str)
-                else list(self.docs_path)
-            ),
+            "fitted": self._fitted,
+            "num_chunks": len(self._chunks) if self._chunks else 0,
         }
-        with open(path, "w") as f:
+        
+        with open(self._config_path, "w") as f:
             json.dump(config, f, indent=2)
-        self._log(f"Config saved → {path}")
+        
+        self._log(f"Config saved → {self._config_path}")
         return self
-
+    
+    # ─────────────────────────────────────────────────────────
+    # 10. load()
+    # ─────────────────────────────────────────────────────────
+    
     @classmethod
-    def load(cls, path: str, embeddings, llm) -> "MetaRAG":
-        """Restore MetaRAG from saved config."""
-        config_path = (
-            os.path.join(path, "config.json")
-            if os.path.isdir(path)
-            else path
-        )
-
+    def load(cls, project: str, embeddings, generator, vector_db=None) -> "MetaRAG":
+        """
+        Load MetaRAG from saved state.
+        
+        Args:
+            project: project name
+            embeddings: embedding model
+            generator: LLM generator
+            vector_db: optional vector DB (defaults to InMemory)
+        
+        Returns:
+            loaded MetaRAG instance
+        """
+        config_path = f".metarag/{project}/config.json"
+        
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Config not found: {config_path}")
+        
         with open(config_path) as f:
             config = json.load(f)
-
+        
         rag = cls(
-            docs=config["docs_path"],
+            docs=[],  # dummy, will load from cache
             embeddings=embeddings,
-            llm=llm,
-            project=config["project"],
-            chunk_size=config["chunk_size"],
-            k=config["k"],
-            eval_preset=config["eval_preset"],
+            generator=generator,
+            project=project,
+            vector_db=vector_db,
+            chunk_size=config.get("chunk_size", 500),
+            chunk_overlap=config.get("chunk_overlap", 50),
+            chunk_strategy=config.get("chunk_strategy", "recursive"),
+            k=config.get("k", 4),
+            eval_preset=config.get("eval_preset", "balanced"),
         )
-        rag.fit()
+        
+        # Mark as fitted (will load chunks, profile from cache in fit())
+        rag._fitted = config.get("fitted", False)
+        
+        print(f"[MetaRAG] Loaded project: {project}")
         return rag
-
+    
     # ─────────────────────────────────────────────────────────
-    # INTERNAL SETUP
+    # 11. get_benchmark_data()
     # ─────────────────────────────────────────────────────────
+    
+    def get_benchmark_data(self) -> pd.DataFrame:
+        """
+        Return benchmark CSV as DataFrame.
+        Users can train their own models on this data.
+        
+        Returns:
+            DataFrame with all benchmark results
+        """
+        if not os.path.exists(self._benchmark_path):
+            raise FileNotFoundError(f"Benchmark CSV not found. Run benchmark() first.")
+        
+        return pd.read_csv(self._benchmark_path)
+    
+    # ─────────────────────────────────────────────────────────
+    # 12. get_router_thresholds()
+    # ─────────────────────────────────────────────────────────
+    
+    def get_router_thresholds(self) -> Dict[str, Any]:
+        """
+        Return learned router thresholds (for inspection).
+        
+        Returns:
+            dict of thresholds per pipeline
+        """
+        if self._learned_router is None:
+            return {}
+        
+        return self._learned_router.get_thresholds()
+    
+    # ─────────────────────────────────────────────────────────
+    # Configuration Methods (optional)
+    # ─────────────────────────────────────────────────────────
+    
+    def set_llm(self, generator) -> "MetaRAG":
+        """Replace LLM generator."""
+        if not hasattr(generator, "generate"):
+            raise TypeError("generator must have .generate(prompt) method")
+        self.generator = generator
+        self._log("LLM generator updated")
+        return self
+    
+    def set_embeddings(self, embeddings) -> "MetaRAG":
+        """Replace embeddings model."""
+        if not hasattr(embeddings, "embed"):
+            raise TypeError("embeddings must have .embed(text) method")
+        self.embeddings = embeddings
+        self._log("Embeddings model updated")
+        return self
+    
+    def rebuild(self, force: bool = True) -> "MetaRAG":
+        """Force rebuild of index and pipelines."""
+        self._log("Rebuilding index and pipelines...")
+        return self.fit(force=force)
+    
+    def set_router(self, router) -> "MetaRAG":
+        """
+        Replace the routing strategy. Accepts anything satisfying
+        RouterInterface's contract: .route(features: dict) -> str
 
-    def _load_docs_and_index(self, force: bool = False):
-        """Load documents, chunk, index."""
+        Args:
+            router: a Router, LearnedRuleRouter, or any user-supplied object
+                    with a .route(features) method — e.g. a wrapper around
+                    a model trained on rag.get_benchmark_data()
+
+        Example:
+            df = rag.get_benchmark_data()
+            clf = RandomForestClassifier().fit(X, y)
+            rag.set_router(MyRouterAdapter(clf, pipeline_names))
+        """
+        if not hasattr(router, "route"):
+            raise TypeError("router must have a .route(features) method")
+
+        self._router = router
+        self._log(f"Router updated → {router.__class__.__name__}")
+        return self
+    
+    # ═════════════════════════════════════════════════════════
+    # INTERNAL (private, not exposed)
+    # ═════════════════════════════════════════════════════════
+    
+    def _check_fitted(self):
+        """Ensure fit() was called."""
+        if not self._fitted:
+            raise RuntimeError("Call fit() before ask()")
+    
+    def _log(self, msg: str):
+        """Print log message if verbose."""
+        if self.verbose:
+            print(f"[MetaRAG] {msg}")
+    
+    # ─────────────────────────────────────────────────────────
+    # Internal Setup
+    # ─────────────────────────────────────────────────────────
+    
+    def _load_docs_and_chunk(self, force: bool = False):
+        """Load documents and chunk them."""
         from .core.loader import DocumentLoader
         from .core.chunking import Chunker
-        from .core.vector_db import VectorDB
-
+        
         self._log("Loading documents...")
-        docs = DocumentLoader(self.docs_path).load_all()
+        docs = DocumentLoader(self.docs_path).load()
+        
         if not docs:
             raise ValueError(f"No documents found at '{self.docs_path}'")
+        
         self._log(f"{len(docs)} documents loaded")
-
+        
         self._log("Chunking...")
-        self._chunks = Chunker(
-            strategy="recursive",
+        chunker = Chunker(
+            strategy=self.chunk_strategy,
             chunk_size=self.chunk_size,
-            overlap=50,
-        ).chunk_documents(
+            overlap=self.chunk_overlap,
+        )
+        
+        self._chunks = chunker.chunk_documents(
             docs,
-            cache_dir=os.path.join(self._cache_dir, "chunks"),
+            cache_dir=f"{self._cache_dir}/chunks",
             force=force,
         )
+        
         self._log(f"{len(self._chunks)} chunks ready")
+    
+    def _build_vector_index(self, force: bool = False):
+        self._log("Embedding chunks...")
+        chunk_texts = [c.text if hasattr(c, "text") else str(c) for c in self._chunks]
+        chunk_embeddings = self.embeddings.embed_documents(chunk_texts)  # embed text
 
         self._log("Building vector index...")
-        self._db = VectorDB(
-            self.embeddings,
-            db_type="chroma",
-            persist_directory=self._index_dir,
-        )
-        self._db.build(self._chunks, force=force)
-
-    def _load_corpus_profile(self, force: bool = False):
-        """Profile corpus (size, stats, etc)."""
-        from .router.corpus_profiler import CorpusProfiler
-
-        if not force and os.path.exists(self._profile_path):
-            with open(self._profile_path) as f:
-                self._corpus_profile = json.load(f)
-            self._log("Corpus profile loaded from cache")
-        else:
-            self._corpus_profile = CorpusProfiler().profile(self._chunks)
-            with open(self._profile_path, "w") as f:
-                json.dump(self._corpus_profile, f, indent=2)
-            self._log("Corpus profile saved")
-
-    def _setup_pipelines(self):
-        """Initialize all 7 pipeline variants."""
-        from .core.retriever import get_retriever
-        from .pipelines.pipeline import (
-            Pipeline,
-            Reranker,
-            MultiQuery,
-            HyDE,
-        )
-
-        bm25_ret = get_retriever("bm25", chunks=self._chunks, k=self.k)
-        dense_ret = get_retriever("dense", vectordb=self._db, k=self.k)
-        hybrid_ret = get_retriever(
-            "hybrid",
-            vectordb=self._db,
-            chunks=self._chunks,
-            k=self.k,
-        )
-        mmr_ret = get_retriever("mmr", vectordb=self._db, k=self.k)
-        reranker = Reranker()
-
-        self._pipelines = {
-            "straight": Pipeline(retriever=bm25_ret),
-            "dense": Pipeline(retriever=dense_ret),
-            "hybrid": Pipeline(retriever=hybrid_ret),
-            "reranked": Pipeline(retriever=dense_ret, reranker=reranker),
-            "mmr": Pipeline(retriever=mmr_ret),
-            "multiquery": Pipeline(
-                retriever=hybrid_ret,
-                multiquery=MultiQuery(self.llm, n=2),
-            ),
-            "hyde": Pipeline(retriever=dense_ret, hyde=HyDE(self.llm)),
+        self.vector_db.build(self._chunks, chunk_embeddings)  # ← store Chunk objects, not chunk_texts
+    
+    def _build_corpus_profile(self, force: bool = False):
+        """Build corpus statistics profile."""
+        self._log("Profiling corpus...")
+        
+        chunk_texts = [
+            chunk.text if hasattr(chunk, "text") else str(chunk)
+            for chunk in self._chunks
+        ]
+        
+        total_chars = sum(len(t) for t in chunk_texts)
+        avg_chunk = total_chars / len(chunk_texts) if chunk_texts else 0
+        
+        self._corpus_profile = {
+            "num_chunks": len(self._chunks),
+            "total_characters": total_chars,
+            "avg_chunk_size": avg_chunk,
+            "strategy": self.chunk_strategy,
         }
-        self._log(f"{len(self._pipelines)} pipelines ready")
+        
+        with open(self._profile_path, "w") as f:
+            json.dump(self._corpus_profile, f, indent=2)
+    
 
-    def _setup_router(self):
-        """Initialize rule-based router (fallback)."""
-        from .router.selector import Router
+    def _setup_retrievers(self):
+        from .core.retriever import BM25Retriever, DenseRetriever, HybridRetriever, MMRRetriever
 
-        self._router = Router(self._db, self._corpus_profile)
-        self._log("Router ready")
+        # Pass Chunk objects directly — retrievers extract text internally as needed,
+        # and now return real Chunk objects (with metadata) instead of bare strings.
+        self._retrievers["bm25"] = BM25Retriever(self._chunks)
+        self._retrievers["dense"] = DenseRetriever(self._chunks, self.embeddings, self.vector_db)
+        self._retrievers["hybrid"] = HybridRetriever(self._chunks, self.embeddings, self.vector_db)
+        self._retrievers["mmr"] = MMRRetriever(self._chunks, self.embeddings, self.vector_db)
 
-    def _setup_generator(self):
-        """Initialize answer generator."""
-        from .pipelines.generator import GeneratorWrapper
-
-        self._generator = GeneratorWrapper(self.llm)
-        self._log("Generator ready")
-
+        self._log(f"{len(self._retrievers)} retrievers ready (chunk metadata preserved end-to-end)")
+    
+    def _setup_pipelines(self):
+        """Initialize pipeline combinations."""
+        from .pipelines.pipeline import (
+            StraightPipeline,
+            MultiQueryPipeline,
+            RerankedPipeline,
+            FullPipeline,
+        )
+        from .pipelines.pipeline import Reranker
+        
+        # Basic pipelines (always available)
+        self._pipelines["straight"] = StraightPipeline(self._retrievers["bm25"])
+        self._pipelines["dense"] = StraightPipeline(self._retrievers["dense"])
+        self._pipelines["hybrid"] = StraightPipeline(self._retrievers["hybrid"])
+        self._pipelines["mmr"] = StraightPipeline(self._retrievers["mmr"])
+        
+        # Advanced pipelines (with optional reranker)
+        try:
+            reranker = Reranker()
+            self._pipelines["reranked"] = RerankedPipeline(
+                self._retrievers["hybrid"],
+                reranker
+            )
+            self._pipelines["full"] = FullPipeline(
+                self._retrievers["hybrid"],
+                self.generator,
+                reranker,
+                n_variants=2
+            )
+        except ImportError:
+            self._log("⚠️  sentence-transformers not available (reranked pipelines disabled)")
+        
+        # MultiQuery (uses generator)
+        self._pipelines["multiquery"] = MultiQueryPipeline(
+            self._retrievers["hybrid"],
+            self.generator,
+            n_variants=2
+        )
+    
     def _setup_evaluator(self):
-        """Initialize evaluator (5 metrics)."""
+        """Initialize evaluator with 5 metrics."""
         from .Evaluator.evaluator import Evaluator
-
+        
         self._evaluator = Evaluator(self.embeddings, preset=self.eval_preset)
         self._log("Evaluator ready")
 
+    
     # ─────────────────────────────────────────────────────────
-    # INTERNAL: FEATURE EXTRACTION
+    # Internal Features
     # ─────────────────────────────────────────────────────────
-
+    
     def _extract_query_features(self, query: str) -> Dict[str, Any]:
-        """Extract query features for routing."""
-        from .router.query_profiler import QueryProfiler
-        from .router.probe_profiler import ProbeProfiler
-
-        query_prof = QueryProfiler().profile(query)
-        probe_prof = ProbeProfiler().profile(query, self._db)
-
+        """Extract features for router decision."""
+        # Simple features (can be expanded with profilers)
+        words = query.lower().split()
+        avg_word_len = sum(len(w) for w in words) / len(words) if words else 0
+        
         return {
-            **query_prof,
-            **probe_prof,
-            **self._corpus_profile,
+            "query_length": len(query),
+            "num_words": len(words),
+            "avg_word_length": avg_word_len,
+            "num_chunks": len(self._chunks) if self._chunks else 0,
         }
-
-    def _generate_queries(self, num_queries: int) -> List[str]:
-        """Auto-generate queries from docs using LLM."""
-        # For v0.2, simple heuristic: extract sentences from chunks
-        # v0.3 can use LLM-based generation
-
-        import random
-
-        sentences = []
-        for chunk in self._chunks[:20]:  # sample first 20 chunks
-            parts = chunk.split(". ")
-            sentences.extend(
-                [s.strip() for s in parts if len(s.split()) >= 5]
-            )
-
-        selected = random.sample(
-            sentences,
-            min(num_queries, len(sentences)),
-        )
-        return selected
-
+    
     # ─────────────────────────────────────────────────────────
-    # INTERNAL: LOGGING
+    # Internal Router Training
     # ─────────────────────────────────────────────────────────
-
-    def _write_log(self, answer: Answer, score):
+    
+    def _train_learned_router(self, benchmark_df: pd.DataFrame):
+        """
+        Trains the default LearnedRuleRouter on benchmark data.
+        This is the automatic Mode 2 path — a user can always override
+        the result afterward via set_router() with their own implementation.
+        """
+        from .router.learned_rule_router import LearnedRuleRouter
+        router = LearnedRuleRouter(self._base)
+        router.train(benchmark_df)
+        self._router = router
+    
+    # ─────────────────────────────────────────────────────────
+    # Logging
+    # ─────────────────────────────────────────────────────────
+    
+    def _write_log(self, answer: Answer):
         """Log query result to JSONL."""
         row = {
             "query": answer.query,
             "pipeline": answer.pipeline,
             "score": answer.score,
-            "faithfulness": score.faithfulness,
-            "relevancy": score.relevancy,
-            "precision": score.precision_avg,
-            "coverage": score.coverage,
-            "redundancy": score.redundancy,
             "latency_ms": answer.latency_ms,
+            "timestamp": time.time(),
         }
+        
         with open(self._log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
-
-    def _read_logs(self) -> list:
+        
+        self._query_logs.append(row)
+    
+    def _read_logs(self) -> List[Dict]:
         """Read all logged queries."""
         if not os.path.exists(self._log_path):
             return []
+        
         rows = []
         with open(self._log_path, encoding="utf-8") as f:
             for line in f:
@@ -670,24 +895,16 @@ class MetaRAG:
                 if line:
                     try:
                         rows.append(json.loads(line))
-                    except Exception:
+                    except:
                         continue
+        
         return rows
-
-    def _check_fitted(self):
-        """Ensure fit() was called."""
-        if not self._fitted:
-            raise RuntimeError("Call fit() before ask()")
-
-    def _log(self, msg: str):
-        """Print log message if verbose."""
-        if self.verbose:
-            print(f"[MetaRAG] {msg}")
-
+    
     def __repr__(self):
         return (
             f"MetaRAG(project='{self.project}', "
             f"fitted={self._fitted}, "
             f"chunks={len(self._chunks) if self._chunks else 0}, "
-            f"router={'learned' if (self._learned_router and self._learned_router.is_trained) else 'rule-based'})"
+            f"pipelines={len(self._pipelines)}, "
+            f"router={'learned' if (self._learned_router and self._learned_router.is_trained) else 'default'})"
         )

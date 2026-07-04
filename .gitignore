@@ -15,7 +15,7 @@ build/
 .eggs/
 
 # ── Virtual Environment ───────────────────
-ragvenv/
+metarag_v1
 venv/
 .venv/
 env/
@@ -36,8 +36,7 @@ results.json
 
 # ── Data Folder ───────────────────────────
 # keep folder structure, ignore contents
-data/docs/*
-!data/docs/.gitkeep
+metarag/examples/data
 
 data/results/*
 !data/results/.gitkeep
@@ -93,3 +92,5 @@ desktop.ini
 
 basic_usage.py
 test_v01.py
+
+examples

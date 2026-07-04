@@ -2,8 +2,9 @@ import json
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Optional
+from .router_interface import RouterInterface
 
-class LearnedRuleRouter:
+class LearnedRuleRouter(RouterInterface):
     """Learn routing thresholds from benchmark data, apply interpretable rules."""
     
     def __init__(self, base_path: str):

@@ -1,64 +1,29 @@
-# generator.py
+# metarag/pipeline/generator.py
 
 from __future__ import annotations
 import time
 from dataclasses import dataclass, field
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Tuple
+from abc import ABC, abstractmethod
 
 
 # ─────────────────────────────────────────────────────────────
-# Answer — what every pipeline ultimately produces
+# Answer
 # ─────────────────────────────────────────────────────────────
 
-@dataclass
-class Answer:
-    """
-    The final output of MetaRAG.
-    Not just a string — carries everything downstream needs.
 
-    text        → the actual answer
-    query       → original question
-    chunks      → what the LLM used to answer (for evaluation)
-    pipeline    → which pipeline produced this
-    model       → which LLM generated this
-    latency_ms  → how long generation took
-    """
-    text:       str
-    query:      str
-    chunks:     List[Any]
-    pipeline:   str
-    model:      str
-    latency_ms: float
-    metadata:   dict = field(default_factory=dict)
+def _chunk_text(chunk) -> str:
+    """Extract text — supports (text, score) tuples, Chunk objects, or raw strings."""
+    if isinstance(chunk, tuple):
+        return chunk[0]
+    if isinstance(chunk, str):
+        return chunk
+    return getattr(chunk, "text", None) or getattr(chunk, "page_content", "")
 
-    def __repr__(self):
-        return (
-            f"Answer(\n"
-            f"  query      = '{self.query[:60]}'\n"
-            f"  pipeline   = '{self.pipeline}'\n"
-            f"  model      = '{self.model}'\n"
-            f"  latency_ms = {self.latency_ms:.0f}\n"
-            f"  answer     = '{self.text[:100]}...'\n"
-            f")"
-        )
-
-
-# ─────────────────────────────────────────────────────────────
-# Prompt Builder
-# One place where all prompts are defined
-# ─────────────────────────────────────────────────────────────
 
 def build_prompt(query: str, chunks: List[Any]) -> str:
-    """
-    Formats query + retrieved chunks into a clean LLM prompt.
-    Chunks can be LangChain Documents or MetaRAG Chunk objects.
-    """
-    context_parts = []
-    for i, chunk in enumerate(chunks):
-        # handle both LangChain Document and MetaRAG Chunk
-        text = getattr(chunk, "page_content", None) or getattr(chunk, "text", "")
-        context_parts.append(f"[{i+1}] {text.strip()}")
-
+    """Format query + retrieved chunks into an LLM prompt."""
+    context_parts = [f"[{i+1}] {_chunk_text(c).strip()}" for i, c in enumerate(chunks)]
     context = "\n\n".join(context_parts)
 
     return f"""Answer the question using ONLY the context provided below.
@@ -74,191 +39,125 @@ Answer:"""
 
 
 # ─────────────────────────────────────────────────────────────
-# Base Generator
+# Generator Interface — user implements this
 # ─────────────────────────────────────────────────────────────
 
-class BaseGenerator:
-    model_name: str = "base"
-
-    def generate(self, query: str, chunks: List[Any], pipeline: str = "") -> Answer:
-        raise NotImplementedError
-
-
-# ─────────────────────────────────────────────────────────────
-# Ollama Generator — default, free, local
-# ─────────────────────────────────────────────────────────────
-
-class OllamaGenerator(BaseGenerator):
+class GeneratorInterface(ABC):
     """
-    Uses a local Ollama model to generate answers.
-    Free, private, runs on your machine.
-
-    Install: ollama pull llama3
+    Contract for LLM generators.
+    Implement this with any LLM: OpenAI, Anthropic, Gemini, Ollama, local, etc.
+    
+    Example:
+        class MyGenerator(GeneratorInterface):
+            def generate(self, prompt: str) -> str:
+                response = my_llm_client.chat(prompt)
+                return response.text
     """
 
-    def __init__(self, model: str = "llama3", temperature: float = 0.0):
-        from langchain_ollama import ChatOllama
-        self.llm        = ChatOllama(model=model, temperature=temperature)
-        self.model_name = model
+    @abstractmethod
+    def generate(self, prompt: str) -> str:
+        """
+        Generate text from a prompt.
+        
+        Args:
+            prompt: the full prompt string
+        
+        Returns:
+            generated text (string)
+        """
+        pass
 
-    def generate(self, query: str, chunks: List[Any], pipeline: str = "") -> Answer:
-        if not chunks:
-            print("[Generator] Warning — no chunks provided")
 
-        prompt = build_prompt(query, chunks)
+# ─────────────────────────────────────────────────────────────
+# Native Implementation: Ollama (via direct HTTP, no LangChain)
+# ─────────────────────────────────────────────────────────────
 
-        print(f"[OllamaGenerator] Generating with {self.model_name}...")
-        t0   = time.time()
-        text = self.llm.invoke(prompt).content.strip()
-        ms   = round((time.time() - t0) * 1000, 2)
+class OllamaGenerator(GeneratorInterface):
+    """
+    Direct Ollama API generator (no LangChain).
+    Requires: Ollama running locally.
+    """
 
-        print(f"[OllamaGenerator] Done in {ms}ms")
+    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
+        import requests
+        self.model = model
+        self.base_url = base_url
+        self.requests = requests
 
-        return Answer(
-            text       = text,
-            query      = query,
-            chunks     = chunks,
-            pipeline   = pipeline,
-            model      = self.model_name,
-            latency_ms = ms,
+        try:
+            response = requests.get(f"{base_url}/api/tags", timeout=5)
+            if response.status_code != 200:
+                raise ConnectionError(f"Ollama not responding at {base_url}")
+        except Exception as e:
+            raise ConnectionError(
+                f"Cannot connect to Ollama at {base_url}. Run: ollama serve"
+            ) from e
+
+    def generate(self, prompt: str) -> str:
+        response = self.requests.post(
+            f"{self.base_url}/api/generate",
+            json={"model": self.model, "prompt": prompt, "stream": False},
+            timeout=120
         )
+        response.raise_for_status()
+        return response.json()["response"].strip()
 
 
 # ─────────────────────────────────────────────────────────────
-# Groq Generator — free tier, fast
+# GeneratorWrapper — orchestrates prompt building + timing + retries
+# Wraps ANY GeneratorInterface implementation
 # ─────────────────────────────────────────────────────────────
 
-class GroqGenerator(BaseGenerator):
-    """
-    Uses Groq API for fast inference.
-    Free tier available — very fast.
-
-    Install: pip install langchain-groq
-    """
-
-    def __init__(self, model: str = "llama3-8b-8192", api_key: Optional[str] = None):
-        from langchain_groq import ChatGroq
-        self.llm        = ChatGroq(model=model, api_key=api_key)
-        self.model_name = model
-
-    def generate(self, query: str, chunks: List[Any], pipeline: str = "") -> Answer:
-        prompt = build_prompt(query, chunks)
-
-        print(f"[GroqGenerator] Generating with {self.model_name}...")
-        t0   = time.time()
-        text = self.llm.invoke(prompt).content.strip()
-        ms   = round((time.time() - t0) * 1000, 2)
-
-        print(f"[GroqGenerator] Done in {ms}ms")
-
-        return Answer(
-            text       = text,
-            query      = query,
-            chunks     = chunks,
-            pipeline   = pipeline,
-            model      = self.model_name,
-            latency_ms = ms,
-        )
-
-
-# ─────────────────────────────────────────────────────────────
-# OpenAI Generator — paid, optional
-# ─────────────────────────────────────────────────────────────
-
-class OpenAIGenerator(BaseGenerator):
-    """
-    Uses OpenAI GPT models.
-    Paid — only use if needed.
-
-    Install: pip install langchain-openai
-    """
-
-    def __init__(self, model: str = "gpt-4o-mini", api_key: Optional[str] = None):
-        from langchain_openai import ChatOpenAI
-        self.llm        = ChatOpenAI(model=model, api_key=api_key)
-        self.model_name = model
-
-    def generate(self, query: str, chunks: List[Any], pipeline: str = "") -> Answer:
-        prompt = build_prompt(query, chunks)
-
-        print(f"[OpenAIGenerator] Generating with {self.model_name}...")
-        t0   = time.time()
-        text = self.llm.invoke(prompt).content.strip()
-        ms   = round((time.time() - t0) * 1000, 2)
-
-        print(f"[OpenAIGenerator] Done in {ms}ms")
-
-        return Answer(
-            text       = text,
-            query      = query,
-            chunks     = chunks,
-            pipeline   = pipeline,
-            model      = self.model_name,
-            latency_ms = ms,
-        )
-
-
-# ─────────────────────────────────────────────────────────────
-# Factory
-# ─────────────────────────────────────────────────────────────
-
-def get_generator(name: str = "ollama", **kwargs) -> BaseGenerator:
-    """
-    Get a generator by name.
-
-    Options:
-        "ollama"  — local, free (default)
-        "groq"    — API, free tier
-        "openai"  — API, paid
-    """
-    name = name.lower()
-
-    if name == "ollama":
-        return OllamaGenerator(**kwargs)
-    elif name == "groq":
-        return GroqGenerator(**kwargs)
-    elif name == "openai":
-        return OpenAIGenerator(**kwargs)
-    else:
-        raise ValueError(f"Unknown generator '{name}'. Choose from: ollama, groq, openai")
-
-
-# ─────────────────────────────────────────────────────────────
-# GeneratorWrapper — accepts any LangChain LLM directly
-# used by metarag.py so user passes their own llm object
-# ─────────────────────────────────────────────────────────────
+# BEFORE — GeneratorWrapper.generate() built its own Answer object
+# AFTER — it returns (text, latency_ms) and lets the caller build whatever Answer it needs
 
 class GeneratorWrapper:
     """
-    Wraps any LangChain chat model (Ollama, Groq, OpenAI etc.)
-    so MetaRAG can call .generate() without knowing the provider.
+    Wraps any GeneratorInterface implementation.
+    Handles prompt building, timing, and retries.
+    Does NOT construct an Answer — that's the caller's responsibility,
+    since different callers (MetaRAG.ask(), benchmark(), a Mode 1 user)
+    need different Answer shapes.
+
+    Args:
+        generator: object implementing GeneratorInterface (duck-typed — needs .generate(prompt))
+        model_name: optional label for logging/tracking
     """
 
-    def __init__(self, llm):
-        self.llm        = llm
-        self.model_name = getattr(llm, "model", "custom")
+    def __init__(self, generator, model_name: str = None):
+        if not hasattr(generator, "generate"):
+            raise TypeError(
+                "generator must have a .generate(prompt) method. "
+                "Implement GeneratorInterface or provide a compatible object."
+            )
+        self.generator = generator
+        self.model_name = model_name or generator.__class__.__name__
 
-    def generate(self, query: str, chunks: List[Any], pipeline: str = "") -> Answer:
+    def generate_text(self, query: str, chunks: List[Any]) -> Tuple[str, float]:
+        """
+        Build prompt, call the generator, retry on rate limits.
+
+        Returns:
+            (generated_text, latency_ms)
+        """
         prompt = build_prompt(query, chunks)
 
-        for attempt in range(3):
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                t0   = time.time()
-                text = self.llm.invoke(prompt).content.strip()
-                ms   = round((time.time() - t0) * 1000, 2)
-                return Answer(
-                    text       = text,
-                    query      = query,
-                    chunks     = chunks,
-                    pipeline   = pipeline,
-                    model      = self.model_name,
-                    latency_ms = ms,
-                )
+                t0 = time.time()
+                text = self.generator.generate(prompt).strip()
+                ms = round((time.time() - t0) * 1000, 2)
+                return text, ms
             except Exception as e:
-                if "rate_limit" in str(e).lower() or "429" in str(e):
-                    print(f"[Generator] Rate limited — waiting 10s...")
-                    time.sleep(10)
-                else:
+                error_str = str(e).lower()
+                if "rate_limit" in error_str or "429" in error_str:
+                    wait = 10 * (attempt + 1)
+                    print(f"[Generator] Rate limited — waiting {wait}s...")
+                    time.sleep(wait)
+                elif attempt == max_retries - 1:
                     raise e
+                else:
+                    print(f"[Generator] Attempt {attempt+1} failed: {e}. Retrying...")
 
-        raise RuntimeError("[Generator] Failed after 3 attempts")
+        raise RuntimeError(f"[Generator] Failed after {max_retries} attempts")

@@ -4,33 +4,59 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metarag"
-version = "0.2.0"
+version = "0.3.0"
 description = "AutoML for RAG — Intelligent Pipeline Selection Engine"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Ankit Kumar", email = "your-email@example.com"}
+    {name = "Ankit Kumar", email = "ankitsingh17082003@gmail.com"}
 ]
 keywords = ["rag", "llm", "retrieval", "pipeline-selection", "automl"]
 
+# Core dependencies — required for MetaRAG's default in-memory path
+# (InMemoryVectorDB + HybridRetriever, which needs BM25). No LangChain.
 dependencies = [
-    "langchain>=0.2.0",
-    "langchain-community>=0.2.0",
-    "chromadb>=0.5.0",
+    "numpy>=1.24.0,<2.0.0",
     "rank-bm25>=0.2.2",
-    "sentence-transformers>=3.0.0",
-    "pypdf>=4.0.0",
-    "beautifulsoup4>=4.12.0",
-    "python-docx>=1.1.0",
-    "pandas>=2.0.0",
-    "requests>=2.31.0",
-    "nltk>=3.8.0",
-    "python-dotenv>=1.0.0",
+    "pandas>=2.0.0,<3.0.0",
 ]
 
+# Everything else is optional — guarded by try/except in the code itself,
+# with clear install instructions printed if missing. Users only pay for
+# what they actually use.
 [project.optional-dependencies]
-eval = ["ragas>=0.1.0"]
+# Document loading beyond .txt/.md/.json/.csv
+pdf = ["pypdf>=4.0.0,<5.0.0"]
+docx = ["python-docx>=1.1.0"]
+html = ["beautifulsoup4>=4.12.0"]
+
+# Chunking: nltk sentence tokenizer (falls back to regex if absent)
+nltk = ["nltk>=3.8.0"]
+
+# Alternative vector DB backends (InMemoryVectorDB is the zero-dep default)
+chroma = ["chromadb>=0.5.0,<0.6.0"]
+faiss = ["faiss-cpu>=1.8.0"]
+
+# Reranker (cross-encoder) — passthrough no-op if absent
+rerank = ["sentence-transformers>=3.0.0,<4.0.0"]
+
+# Built-in Ollama generator convenience wrapper (users can bring their own
+# generator instead and skip this entirely)
+ollama = ["requests>=2.31.0"]
+
+# Everything above, bundled — convenience for users who want full functionality
+all = [
+    "pypdf>=4.0.0,<5.0.0",
+    "python-docx>=1.1.0",
+    "beautifulsoup4>=4.12.0",
+    "nltk>=3.8.0",
+    "chromadb>=0.5.0,<0.6.0",
+    "faiss-cpu>=1.8.0",
+    "sentence-transformers>=3.0.0,<4.0.0",
+    "requests>=2.31.0",
+]
+
 dev = ["pytest>=7.0", "black>=23.0", "mypy>=1.0"]
 
 [project.urls]

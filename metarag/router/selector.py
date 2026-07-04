@@ -1,27 +1,28 @@
 # router/selector.py
 
 from __future__ import annotations
-from corpus_profiler import CorpusProfiler
-from query_profiler  import QueryProfiler
-from probe_profiler  import ProbeProfiler
+from .corpus_profiler import CorpusProfiler
+from .query_profiler  import QueryProfiler
+from .probe_profiler  import ProbeProfiler
+from .router_interface import RouterInterface
 
-
-class Router:
+class Router(RouterInterface):
     """
     Routes every query to the best pipeline using three signal sources:
 
         CorpusProfile  (35%)  →  what kind of corpus is this?
         QueryProfile   (15%)  →  what kind of query is this?
         ProbeProfile   (50%)  →  how hard is retrieval for this query?
+        embeddings: EmbeddingInterface object (needed by ProbeProfiler to embed queries
 
     Routing logic is rule-based for now.
     Later replaced by a trained ML classifier on logged features.
     """
 
-    def __init__(self, vectordb, corpus_profile: dict):
+    def __init__(self, vectordb, embeddings , corpus_profile: dict):
         self.corpus_profile  = corpus_profile
         self.query_profiler  = QueryProfiler()
-        self.probe_profiler  = ProbeProfiler(vectordb)
+        self.probe_profiler  = ProbeProfiler(vectordb , embeddings)
 
     def route(self, query: str) -> dict:
         qp = self.query_profiler.profile(query)

@@ -1,341 +1,293 @@
-# vector_db.py
+# metarag/core/vector_db.py
 
-from __future__ import annotations
-import os
-from typing import List, Any, Dict
+from abc import ABC, abstractmethod
+from typing import List, Tuple
+import numpy as np
+from retriever import _chunk_text
 
 
-class VectorDB:
+class VectorDBInterface(ABC):
     """
-    Minimal vector database handler for MetaRAG.
-
-    Responsibilities:
-        - Build vector DB from chunks
-        - Load existing vector DB from disk
-        - Add new chunks incrementally
-        - Save / reset the DB
-
-    Supports:
-        - Chroma  (persistent, auto-saves to disk)
-        - FAISS   (in-memory, manual save/load)
-
-    Does NOT handle:
-        - retrieval logic
-        - search modes
-        - pipeline selection
-        - evaluation
-
-    Usage:
-        from langchain_ollama import OllamaEmbeddings
-        from vector_db import VectorDB
-
-        embeddings = OllamaEmbeddings(model="nomic-embed-text")
-
-        db = VectorDB(embeddings, db_type="chroma", persist_directory="./metarag_db")
-        db.build(chunks)
-        db.info()
+    Contract for vector database implementations.
+    User can implement their own (Chroma, FAISS, Pinecone, Weaviate, etc).
     """
+    
+    @abstractmethod
+    def build(self, chunks: List[str], embeddings: List[List[float]]) -> "VectorDBInterface":
+        """
+        Build index from chunks + embeddings.
+        
+        Args:
+            chunks: list of text chunks
+            embeddings: list of embedding vectors
+        
+        Returns:
+            self for chaining
+        """
+        pass
+    
+    @abstractmethod
+    def search(self, query_embedding: List[float], k: int = 4) -> List[Tuple[str, float]]:
+        """
+        Search for top k similar chunks.
+        
+        Args:
+            query_embedding: embedding vector of query
+            k: number of results
+        
+        Returns:
+            list of (chunk_text, similarity_score) tuples
+        """
+        pass
+    
+    @abstractmethod
+    def add(self, chunks: List[str], embeddings: List[List[float]]) -> "VectorDBInterface":
+        """Add chunks to existing index."""
+        pass
+    
+    @abstractmethod
+    def save(self, path: str = None) -> "VectorDBInterface":
+        """Persist index to disk."""
+        pass
+    
+    @abstractmethod
+    def load(self, path: str = None) -> "VectorDBInterface":
+        """Load index from disk."""
+        pass
 
-    SUPPORTED_DB = ("chroma", "faiss")
 
-    def __init__(
-        self,
-        embedding_model,
-        db_type: str = "chroma",
-        persist_directory: str = "./metarag_db",
-    ):
-        if db_type.lower() not in self.SUPPORTED_DB:
-            raise ValueError(
-                f"Unsupported db_type '{db_type}'. Choose from: {self.SUPPORTED_DB}"
-            )
+# ─────────────────────────────────────────────────────────────
+# Native Implementation: In-Memory Vector DB (no deps)
+# ─────────────────────────────────────────────────────────────
 
-        self.embedding_model   = embedding_model
-        self.db_type           = db_type.lower()
+class InMemoryVectorDB(VectorDBInterface):
+    """
+    Simple in-memory vector database.
+    No external dependencies.
+    Good for prototyping, testing, small corpora (<100K vectors).
+    """
+    
+    def __init__(self):
+        self.chunks = []
+        self.embeddings = None  # numpy array
+        self.ids = []
+    
+    def build(self, chunks: List[str], embeddings: List[List[float]]) -> "InMemoryVectorDB":
+        """Build in-memory index."""
+        self.chunks = chunks
+        self.embeddings = np.array(embeddings, dtype=np.float32)
+        self.ids = [f"doc_{i}" for i in range(len(chunks))]
+        
+        print(f"[InMemoryVectorDB] Built index with {len(chunks)} chunks")
+        return self
+    
+    def search(self, query_embedding: List[float], k: int = 4) -> List[Tuple[str, float]]:
+        """Search using cosine similarity. Zero-vector embeddings are guarded against."""
+        if self.embeddings is None:
+            raise RuntimeError("Index not built. Call build() first.")
+
+        query_vec = np.array(query_embedding, dtype=np.float32)
+
+        # Guard against zero-vector chunk embeddings (empty/broken embeddings)
+        norms = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
+        safe_norms = np.where(norms == 0, 1e-8, norms)
+        normalized = self.embeddings / safe_norms
+
+        # Guard against a zero-vector query embedding too
+        query_norm = np.linalg.norm(query_vec)
+        query_norm = query_norm if query_norm != 0 else 1e-8
+        query_normalized = query_vec / query_norm
+
+        similarities = np.dot(normalized, query_normalized)
+
+        # Any chunk that had a genuinely zero embedding gets forced to the bottom
+        # of the ranking (similarity -inf) rather than participating in nan-driven
+        # undefined ordering.
+        zero_embedding_mask = (norms.flatten() == 0)
+        similarities = np.where(zero_embedding_mask, -np.inf, similarities)
+
+        top_indices = np.argsort(similarities)[::-1][:k]
+
+        return [(self.chunks[i], float(similarities[i])) for i in top_indices]
+    
+    def add(self, chunks: List[str], embeddings: List[List[float]]) -> "InMemoryVectorDB":
+        """Add chunks to index."""
+        new_embeddings = np.array(embeddings, dtype=np.float32)
+        
+        self.chunks.extend(chunks)
+        if self.embeddings is None:
+            self.embeddings = new_embeddings
+        else:
+            self.embeddings = np.vstack([self.embeddings, new_embeddings])
+        
+        start_id = len(self.ids)
+        self.ids.extend([f"doc_{start_id + i}" for i in range(len(chunks))])
+        
+        return self
+    
+    def save(self, path: str = None) -> "InMemoryVectorDB":
+        """In-memory DB doesn't persist (data lost on restart)."""
+        print("[InMemoryVectorDB] Warning: In-memory DB doesn't persist. Data will be lost on restart.")
+        return self
+    
+    def load(self, path: str = None) -> "InMemoryVectorDB":
+        """Nothing to load from disk."""
+        return self
+
+
+# ─────────────────────────────────────────────────────────────
+# Optional Implementation: Chroma Vector DB
+# ─────────────────────────────────────────────────────────────
+
+class ChromaVectorDB(VectorDBInterface):
+    def __init__(self, persist_directory: str = ".metarag/index"):
+        try:
+            import chromadb
+        except ImportError:
+            raise ImportError("chromadb required for ChromaVectorDB. Install: pip install chromadb")
+
         self.persist_directory = persist_directory
-        self.db                = None
-        self._chunk_count      = 0
+        self.client = chromadb.PersistentClient(path=persist_directory)
+        self.collection = self.client.get_or_create_collection(
+            name="documents", metadata={"hnsw:space": "cosine"}
+        )
+        self._chunks_by_id = {}  # id -> original chunk object (Chunk or str)
 
-    # ─────────────────────────────────────────
-    # BUILD
-    # ─────────────────────────────────────────
+    def build(self, chunks: List, embeddings: List[List[float]]) -> "ChromaVectorDB":
+        batch_size = 41666
 
-    def build(self, chunks: List[Any], force: bool = False) -> "VectorDB":
-        """
-        Build a new vector DB from a list of Chunk objects.
+        for i in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[i:i + batch_size]
+            batch_embeddings = embeddings[i:i + batch_size]
+            batch_ids = [f"doc_{j}" for j in range(i, i + len(batch_chunks))]
 
-        If the DB already exists on disk and force=False,
-        loads from disk instead of rebuilding — saves minutes.
-
-        Args:
-            chunks : List of Chunk objects with .text and .metadata
-            force  : if True, always rebuild even if DB exists
-
-        Returns:
-            self — for method chaining.
-        """
-        if not chunks:
-            raise ValueError("Cannot build VectorDB from empty chunk list.")
-
-        # ── skip rebuild if already exists ───────────────────
-        if not force and self.db_type == "chroma":
-            if os.path.exists(self.persist_directory):
-                print(f"[VectorDB] Found existing Chroma DB — loading instead of rebuilding.")
-                print(f"[VectorDB] Pass force=True to rebuild from scratch.")
-                return self.load()
-
-        if not force and self.db_type == "faiss":
-            if os.path.exists(self.persist_directory):
-                print(f"[VectorDB] Found existing FAISS index — loading instead of rebuilding.")
-                return self.load()
-
-        texts     = [c.text for c in chunks]
-        metadatas = [getattr(c, "metadata", {}) for c in chunks]
-
-        if self.db_type == "chroma":
-            from langchain_community.vectorstores import Chroma
-
-            self.db = Chroma.from_texts(
-                texts=texts,
-                embedding=self.embedding_model,
-                metadatas=metadatas,
-                persist_directory=self.persist_directory,
+            self.collection.add(
+                ids=batch_ids,
+                embeddings=batch_embeddings,
+                documents=[_chunk_text(c) for c in batch_chunks],   # Chroma needs plain strings
             )
 
-        elif self.db_type == "faiss":
-            from langchain_community.vectorstores import FAISS
+            # Keep original objects so search() can reconstruct them, metadata intact
+            for doc_id, chunk in zip(batch_ids, batch_chunks):
+                self._chunks_by_id[doc_id] = chunk
 
-            self.db = FAISS.from_texts(
-                texts=texts,
-                embedding=self.embedding_model,
-                metadatas=metadatas,
-            )
-
-        self._chunk_count = len(texts)
-        print(f"[VectorDB] Built {self.db_type.upper()} — {self._chunk_count} chunks indexed.")
+        print(f"[ChromaVectorDB] Built index with {len(chunks)} chunks → {self.persist_directory}")
         return self
 
-    # ─────────────────────────────────────────
-    # LOAD
-    # ─────────────────────────────────────────
-
-    def load(self) -> "VectorDB":
-        """
-        Load an existing vector DB from disk.
-        - Chroma: loads from persist_directory automatically.
-        - FAISS:  loads from persist_directory using load_local().
-
-        Returns:
-            self — for method chaining.
-        """
-        if self.db_type == "chroma":
-            from langchain_community.vectorstores import Chroma
-
-            if not os.path.exists(self.persist_directory):
-                raise FileNotFoundError(
-                    f"No Chroma DB found at '{self.persist_directory}'. "
-                    f"Call build() first."
-                )
-
-            self.db = Chroma(
-                persist_directory=self.persist_directory,
-                embedding_function=self.embedding_model,
-            )
-            print(f"[VectorDB] Loaded Chroma DB from '{self.persist_directory}'.")
-
-        elif self.db_type == "faiss":
-            from langchain_community.vectorstores import FAISS
-
-            if not os.path.exists(self.persist_directory):
-                raise FileNotFoundError(
-                    f"No FAISS index found at '{self.persist_directory}'. "
-                    f"Call build() and save_faiss() first."
-                )
-
-            self.db = FAISS.load_local(
-                self.persist_directory,
-                embeddings=self.embedding_model,
-                allow_dangerous_deserialization=True,
-            )
-            print(f"[VectorDB] Loaded FAISS index from '{self.persist_directory}'.")
-
-        return self
-
-    # ─────────────────────────────────────────
-    # SAVE (FAISS only)
-    # ─────────────────────────────────────────
-
-    def save_faiss(self) -> "VectorDB":
-        """
-        Save FAISS index to disk.
-        Chroma auto-persists — no manual save needed.
-
-        Returns:
-            self — for method chaining.
-        """
-        self._check_initialized()
-
-        if self.db_type != "faiss":
-            print("[VectorDB] Chroma auto-persists to disk — no manual save needed.")
-            return self
-
-        os.makedirs(self.persist_directory, exist_ok=True)
-        self.db.save_local(self.persist_directory)
-        print(f"[VectorDB] FAISS index saved to '{self.persist_directory}'.")
-        return self
-
-    # ─────────────────────────────────────────
-    # ADD (incremental)
-    # ─────────────────────────────────────────
-
-    def add(self, chunks: List[Any]) -> "VectorDB":
-        """
-        Add new chunks to an already-built or loaded DB.
-        Useful for incremental ingestion without rebuilding.
-
-        Args:
-            chunks: New Chunk objects to add.
-
-        Returns:
-            self — for method chaining.
-        """
-        self._check_initialized()
-
-        if not chunks:
-            print("[VectorDB] No chunks provided to add.")
-            return self
-
-        texts     = [c.text for c in chunks]
-        metadatas = [getattr(c, "metadata", {}) for c in chunks]
-
-        self.db.add_texts(texts=texts, metadatas=metadatas)
-        self._chunk_count += len(texts)
-        print(f"[VectorDB] Added {len(texts)} chunks. Total: {self._chunk_count}.")
-        return self
-
-    # ─────────────────────────────────────────
-    # GET RAW DB (for retriever.py)
-    # ─────────────────────────────────────────
-
-    def get_db(self):
-        """
-        Return the raw vector store object.
-        Used by retriever.py to run searches against.
-        """
-        self._check_initialized()
-        return self.db
-
-    # ─────────────────────────────────────────
-    # INFO
-    # ─────────────────────────────────────────
-
-    def info(self) -> Dict[str, Any]:
-        """Return a dict of basic DB metadata."""
-        return {
-            "db_type":           self.db_type,
-            "persist_directory": self.persist_directory,
-            "initialized":       self.db is not None,
-            "chunk_count":       self._chunk_count,
-        }
-
-    def stats(self):
-        """Print a readable summary of the current DB state."""
-        i = self.info()
-        print(f"\n[VectorDB] ─────────────────────────────")
-        print(f"  Type        : {i['db_type'].upper()}")
-        print(f"  Initialized : {i['initialized']}")
-        print(f"  Chunks      : {i['chunk_count']}")
-        print(f"  Directory   : {i['persist_directory']}")
-        print(f"────────────────────────────────────────\n")
-
-    # ─────────────────────────────────────────
-    # DELETE / RESET
-    # ─────────────────────────────────────────
-
-    def delete_collection(self):
-        """
-        Permanently delete the Chroma collection from disk.
-        WARNING: This cannot be undone.
-        """
-        if self.db_type != "chroma":
-            raise ValueError("delete_collection() is only supported for Chroma.")
-
-        self._check_initialized()
-        self.db.delete_collection()
-        self.db = None
-        self._chunk_count = 0
-        print(f"[VectorDB] Chroma collection permanently deleted.")
-
-    def reset(self):
-        """
-        Clear the in-memory DB reference.
-        Does NOT delete anything from disk.
-        Call load() to restore from disk after reset.
-        """
-        self.db = None
-        self._chunk_count = 0
-        print("[VectorDB] In-memory reference cleared. Disk data preserved.")
-
-    # ─────────────────────────────────────────
-    # INTERNAL
-    # ─────────────────────────────────────────
-
-    def _check_initialized(self):
-        if self.db is None:
-            raise ValueError(
-                "VectorDB is not initialized. Call build() or load() first."
-            )
-
-    def __repr__(self):
-        return (
-            f"VectorDB(type={self.db_type}, "
-            f"initialized={self.db is not None}, "
-            f"chunks={self._chunk_count})"
+    def search(self, query_embedding: List[float], k: int = 4) -> List[Tuple]:
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=k,
+            include=["distances"],   # documents not needed — we reconstruct from _chunks_by_id
         )
 
+        ids = results["ids"][0] if results["ids"] else []
+        distances = results["distances"][0] if results["distances"] else []
+        similarities = [1 / (1 + d) for d in distances]
+
+        # Return ORIGINAL chunk objects (with metadata intact), not raw Chroma strings
+        return [(self._chunks_by_id.get(doc_id, doc_id), sim) for doc_id, sim in zip(ids, similarities)]
+
+    def add(self, chunks: List, embeddings: List[List[float]]) -> "ChromaVectorDB":
+        start_id = self.collection.count()
+        batch_ids = [f"doc_{start_id + i}" for i in range(len(chunks))]
+
+        self.collection.add(
+            ids=batch_ids,
+            embeddings=embeddings,
+            documents=[_chunk_text(c) for c in chunks],
+        )
+        for doc_id, chunk in zip(batch_ids, chunks):
+            self._chunks_by_id[doc_id] = chunk
+
+        return self
+    
+    def save(self, path: str = None) -> "ChromaVectorDB":
+        """Chroma persists automatically."""
+        return self
+    
+    def load(self, path: str = None) -> "ChromaVectorDB":
+        """Chroma loads automatically."""
+        return self
+
 
 # ─────────────────────────────────────────────────────────────
-# Quick demo
+# Optional Implementation: FAISS Vector DB
 # ─────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    from dataclasses import dataclass, field
-
-    # Minimal Chunk mock for demo
-    @dataclass
-    class Chunk:
-        text: str
-        metadata: dict = field(default_factory=dict)
-
-    sample_chunks = [
-        Chunk("Einstein developed the theory of relativity in 1905.",
-              {"source": "physics.txt", "strategy": "recursive"}),
-        Chunk("Special relativity deals with objects moving at constant speed.",
-              {"source": "physics.txt", "strategy": "recursive"}),
-        Chunk("General relativity extends this to include gravity.",
-              {"source": "physics.txt", "strategy": "recursive"}),
-    ]
-
-    try:
-        from langchain_ollama import OllamaEmbeddings
-        embeddings = OllamaEmbeddings(model="nomic-embed-text")
-    except Exception:
-        print("[Demo] Ollama not available — skipping live demo.")
-        embeddings = None
-
-    if embeddings:
-        # Chroma
-        db = VectorDB(embeddings, db_type="chroma", persist_directory="./demo_db")
-        db.build(sample_chunks)
-        db.stats()
-
-        # Add more
-        extra = [Chunk("GPS satellites must account for relativistic effects.",
-                       {"source": "physics.txt", "strategy": "recursive"})]
-        db.add(extra)
-        db.stats()
-
-        # Reset and reload
-        db.reset()
-        db.load()
-        db.stats()
-        print(db)
+class FAISSVectorDB(VectorDBInterface):
+    """
+    Fast vector database using FAISS.
+    Optional dependency: faiss-cpu or faiss-gpu
+    """
+    
+    def __init__(self):
+        try:
+            import faiss
+        except ImportError:
+            raise ImportError(
+                "faiss required for FAISSVectorDB. "
+                "Install: pip install faiss-cpu (or faiss-gpu)"
+            )
+        
+        self.faiss = faiss.faiss
+        self.index = None
+        self.chunks = []
+        self.embeddings = None
+    
+    def build(self, chunks: List[str], embeddings: List[List[float]]) -> "FAISSVectorDB":
+        """Build FAISS index."""
+        embeddings_array = np.array(embeddings, dtype=np.float32)
+        dim = embeddings_array.shape[1]
+        
+        # Create flat index with L2 distance
+        self.index = self.faiss.IndexFlatL2(dim)
+        self.index.add(embeddings_array)
+        
+        self.chunks = chunks
+        self.embeddings = embeddings_array
+        
+        print(f"[FAISSVectorDB] Built index with {len(chunks)} chunks")
+        return self
+    
+    def search(self, query_embedding: List[float], k: int = 4) -> List[Tuple[str, float]]:
+        """Search using FAISS."""
+        if self.index is None:
+            raise RuntimeError("Index not built. Call build() first.")
+        
+        query_vec = np.array([query_embedding], dtype=np.float32)
+        distances, indices = self.index.search(query_vec, k)
+        
+        # Convert L2 distance to similarity
+        similarities = [1 / (1 + d) for d in distances[0]]
+        
+        return [(self.chunks[int(i)], float(sim)) for i, sim in zip(indices[0], similarities)]
+    
+    def add(self, chunks: List[str], embeddings: List[List[float]]) -> "FAISSVectorDB":
+        """Add chunks to FAISS."""
+        new_embeddings = np.array(embeddings, dtype=np.float32)
+        
+        self.index.add(new_embeddings)
+        self.chunks.extend(chunks)
+        
+        if self.embeddings is None:
+            self.embeddings = new_embeddings
+        else:
+            self.embeddings = np.vstack([self.embeddings, new_embeddings])
+        
+        return self
+    
+    def save(self, path: str = ".metarag/faiss_index.bin") -> "FAISSVectorDB":
+        """Save FAISS index to disk."""
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        self.faiss.write_index(self.index, path)
+        print(f"[FAISSVectorDB] Index saved to {path}")
+        return self
+    
+    def load(self, path: str = ".metarag/faiss_index.bin") -> "FAISSVectorDB":
+        """Load FAISS index from disk."""
+        self.index = self.faiss.read_index(path)
+        print(f"[FAISSVectorDB] Index loaded from {path}")
+        return self
