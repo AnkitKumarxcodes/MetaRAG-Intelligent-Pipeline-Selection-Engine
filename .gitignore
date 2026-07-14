@@ -17,7 +17,7 @@ build/
 venv/
 env/
 ENV/
-testsVenv_V1/
+testsVenv_V0.3.0/
 metarag_v1/
 
 # ── Environment Variables ─────────────────
