@@ -2,45 +2,21 @@
 """Full MetaRAG walkthrough — fit, ask, benchmark, and every observability output."""
 
 from pathlib import Path
-import requests
+
 from metarag import MetaRAG, OllamaGenerator
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "tests" / "data"
 
-
-import concurrent.futures
 from metarag import CachedEmbeddings
+from metarag.utils import FakeEmbeddings , FakeGenerator
 
-
-class OllamaEmbeddings:
-    def __init__(self, model="nomic-embed-text", base_url="http://localhost:11434", max_workers=8):
-        self.model, self.base_url, self.max_workers = model, base_url, max_workers
-
-    def embed_query(self, text):
-        r = requests.post(f"{self.base_url}/api/embeddings", json={"model": self.model, "prompt": text})
-        r.raise_for_status()
-        return r.json()["embedding"]
-
-    def embed_documents(self, texts):
-        if not texts:
-            return []
-        results = [None] * len(texts)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as ex:
-            futures = {ex.submit(self.embed_query, t): i for i, t in enumerate(texts)}
-            done = 0
-            for f in concurrent.futures.as_completed(futures):
-                results[futures[f]] = f.result()
-                done += 1
-                if done % 10 == 0 or done == len(texts):
-                    print(f"  [Embeddings] {done}/{len(texts)}")
-        return results
     
-embeddings = CachedEmbeddings(OllamaEmbeddings())
+embeddings = CachedEmbeddings(FakeEmbeddings())
 
 rag = MetaRAG(
     docs=str(DATA_DIR),
     embeddings=embeddings,
-    generator=OllamaGenerator(model="mistral"),
+    generator=FakeGenerator(),
     project="metarag_demo",
     k=3,
 )

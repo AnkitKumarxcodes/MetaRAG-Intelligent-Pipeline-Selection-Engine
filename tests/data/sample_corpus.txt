@@ -1,0 +1,99 @@
+META RAG SAMPLE CORPUS
+
+This text file contains varied writing styles.
+
+News: Researchers continue improving retrieval-augmented generation
+systems.
+
+Technical: Cosine similarity measures angular similarity between
+embedding vectors. BM25 is a lexical retrieval algorithm. MMR balances
+relevance and diversity.
+
+Business: Companies increasingly deploy AI assistants for customer
+support, knowledge management, document search, and enterprise
+automation.
+
+Science: The speed of light is approximately 299,792,458 meters per
+second. Water freezes at 0°C under standard atmospheric pressure.
+
+History: The World Wide Web was introduced by Tim Berners-Lee.
+
+Programming: Python is commonly used for machine learning, data science,
+automation, and backend services.
+
+End of sample.
+
+META RAG SAMPLE CORPUS
+
+This text file contains varied writing styles.
+
+News: Researchers continue improving retrieval-augmented generation
+systems.
+
+Technical: Cosine similarity measures angular similarity between
+embedding vectors. BM25 is a lexical retrieval algorithm. MMR balances
+relevance and diversity.
+
+Business: Companies increasingly deploy AI assistants for customer
+support, knowledge management, document search, and enterprise
+automation.
+
+Science: The speed of light is approximately 299,792,458 meters per
+second. Water freezes at 0°C under standard atmospheric pressure.
+
+History: The World Wide Web was introduced by Tim Berners-Lee.
+
+Programming: Python is commonly used for machine learning, data science,
+automation, and backend services.
+
+End of sample.
+
+META RAG SAMPLE CORPUS
+
+This text file contains varied writing styles.
+
+News: Researchers continue improving retrieval-augmented generation
+systems.
+
+Technical: Cosine similarity measures angular similarity between
+embedding vectors. BM25 is a lexical retrieval algorithm. MMR balances
+relevance and diversity.
+
+Business: Companies increasingly deploy AI assistants for customer
+support, knowledge management, document search, and enterprise
+automation.
+
+Science: The speed of light is approximately 299,792,458 meters per
+second. Water freezes at 0°C under standard atmospheric pressure.
+
+History: The World Wide Web was introduced by Tim Berners-Lee.
+
+Programming: Python is commonly used for machine learning, data science,
+automation, and backend services.
+
+End of sample.
+
+META RAG SAMPLE CORPUS
+
+This text file contains varied writing styles.
+
+News: Researchers continue improving retrieval-augmented generation
+systems.
+
+Technical: Cosine similarity measures angular similarity between
+embedding vectors. BM25 is a lexical retrieval algorithm. MMR balances
+relevance and diversity.
+
+Business: Companies increasingly deploy AI assistants for customer
+support, knowledge management, document search, and enterprise
+automation.
+
+Science: The speed of light is approximately 299,792,458 meters per
+second. Water freezes at 0°C under standard atmospheric pressure.
+
+History: The World Wide Web was introduced by Tim Berners-Lee.
+
+Programming: Python is commonly used for machine learning, data science,
+automation, and backend services.
+
+End of sample.

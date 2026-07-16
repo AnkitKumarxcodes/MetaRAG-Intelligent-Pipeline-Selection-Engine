@@ -1,5 +1,6 @@
 from pathlib import Path
 from metarag import DocumentLoader
+import pytest
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 

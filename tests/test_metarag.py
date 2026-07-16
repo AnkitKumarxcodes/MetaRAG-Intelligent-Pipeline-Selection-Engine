@@ -19,42 +19,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 # Fakes — deterministic, offline, no network
 # ─────────────────────────────────────────────────────────
 
-class FakeEmbeddings(EmbeddingInterface):
-    """Hash-based bag-of-words vectors — deterministic, gives real (if
-    crude) similarity structure based on shared words, no network calls."""
-
-    def __init__(self, dim: int = 16):
-        self.dim = dim
-
-    def _vec(self, text: str):
-        import hashlib
-        vec = [0.0] * self.dim
-        for word in text.lower().split():
-            h = int(hashlib.md5(word.encode()).hexdigest(), 16)
-            vec[h % self.dim] += 1.0
-        norm = sum(v * v for v in vec) ** 0.5 or 1.0
-        return [v / norm for v in vec]
-
-    def embed_query(self, text: str):
-        return self._vec(text)
-
-    def embed_documents(self, texts):
-        return [self._vec(t) for t in texts]
-
-
-class FakeGenerator:
-    def generate(self, prompt: str) -> str:
-        if "different versions" in prompt or "Generate" in prompt:
-            return "Variant one\nVariant two"
-        if "Hypothetical answer" in prompt:
-            return "A plausible hypothetical answer for retrieval."
-        return "This is a generated answer based on the provided context."
-
-
-class FakeSklearnModel:
-    """Minimal .predict()-only stand-in for set_router_from_model()."""
-    def predict(self, X):
-        return ["straight"] * len(X)
+from metarag.utils import FakeEmbeddings , FakeGenerator , FakeSklearnModel
 
 
 QUERIES = [

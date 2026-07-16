@@ -5,7 +5,6 @@ and real Ollama embeddings from the test corpus (same setup as vector_db_demo.py
 """
 
 from pathlib import Path
-import requests
 import pytest
 
 from metarag import DocumentLoader, Chunker, CachedEmbeddings, InMemoryVectorDB, Chunk
@@ -13,49 +12,11 @@ from metarag import DocumentLoader, Chunker, CachedEmbeddings, InMemoryVectorDB,
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
-import concurrent.futures
-
-class OllamaEmbeddings:
-    """
-    Minimal EmbeddingInterface implementation over Ollama's /api/embeddings.
-    embed_documents() fires requests concurrently (I/O-bound — waiting on
-    Ollama's HTTP response, not CPU-bound), instead of one-at-a-time.
-    CachedEmbeddings only ever passes UNCACHED texts here, so this only
-    runs at all for chunks not already in .metarag/embeddings/.
-    """
-
-    def __init__(self, model: str = "nomic-embed-text", base_url: str = "http://localhost:11434", max_workers: int = 8):
-        self.model = model
-        self.base_url = base_url
-        self.max_workers = max_workers
-
-    def embed_query(self, text: str):
-        resp = requests.post(f"{self.base_url}/api/embeddings", json={"model": self.model, "prompt": text})
-        resp.raise_for_status()
-        return resp.json()["embedding"]
-
-    def embed_documents(self, texts):
-        if not texts:
-            return []
-
-        results = [None] * len(texts)
-        completed = 0
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_idx = {executor.submit(self.embed_query, t): i for i, t in enumerate(texts)}
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                results[idx] = future.result()
-                completed += 1
-                if completed % 10 == 0 or completed == len(texts):
-                    print(f"  [Embeddings] {completed}/{len(texts)} chunks embedded...")
-
-        return results
-
-
+from metarag.utils import FakeEmbeddings
+    
 @pytest.fixture(scope="module")
 def embeddings():
-    return CachedEmbeddings(OllamaEmbeddings())
+    return CachedEmbeddings(FakeEmbeddings())
 
 
 @pytest.fixture(scope="module")

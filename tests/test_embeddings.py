@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import pytest
 from metarag.core.embeddings import CachedEmbeddings
 
 
@@ -7,20 +7,7 @@ from metarag.core.embeddings import CachedEmbeddings
 # Fake Embedding Model
 # ----------------------------------------------------
 
-class FakeEmbeddingModel:
-
-    model_name = "fake-model"
-
-    def embed_query(self, text):
-
-        return [float(len(text)), 1.0, 2.0]
-
-    def embed_documents(self, texts):
-
-        return [
-            [float(len(t)), 1.0, 2.0]
-            for t in texts
-        ]
+from metarag.utils import FakeEmbeddings
 
 
 # ----------------------------------------------------
@@ -29,7 +16,7 @@ class FakeEmbeddingModel:
 
 def test_cached_embeddings_creation(tmp_path):
 
-    model = FakeEmbeddingModel()
+    model = FakeEmbeddings()
 
     embedder = CachedEmbeddings(
         model,
@@ -42,7 +29,7 @@ def test_cached_embeddings_creation(tmp_path):
 def test_embed_query_returns_vector(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 
@@ -55,7 +42,7 @@ def test_embed_query_returns_vector(tmp_path):
 def test_embed_alias(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 
@@ -65,7 +52,7 @@ def test_embed_alias(tmp_path):
 def test_embed_documents_returns_vectors(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 
@@ -86,7 +73,7 @@ def test_embed_documents_returns_vectors(tmp_path):
 def test_same_query_same_embedding(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 
@@ -100,7 +87,7 @@ def test_same_query_same_embedding(tmp_path):
 def test_cache_file_created(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 
@@ -114,7 +101,7 @@ def test_cache_file_created(tmp_path):
 def test_batch_cache(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 
@@ -134,7 +121,7 @@ def test_batch_cache(tmp_path):
 def test_empty_batch(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 
@@ -161,7 +148,7 @@ def test_invalid_model():
 
 def test_model_name_detection(tmp_path):
 
-    model = FakeEmbeddingModel()
+    model = FakeEmbeddings()
 
     embedder = CachedEmbeddings(
         model,
@@ -173,7 +160,7 @@ def test_model_name_detection(tmp_path):
 
 def test_cache_persistence(tmp_path):
 
-    model = FakeEmbeddingModel()
+    model = FakeEmbeddings()
 
     embedder1 = CachedEmbeddings(
         model,
@@ -195,7 +182,7 @@ def test_cache_persistence(tmp_path):
 def test_document_order_preserved(tmp_path):
 
     embedder = CachedEmbeddings(
-        FakeEmbeddingModel(),
+        FakeEmbeddings(),
         cache_dir=tmp_path,
     )
 

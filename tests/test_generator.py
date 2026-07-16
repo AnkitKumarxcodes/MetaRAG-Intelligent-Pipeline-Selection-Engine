@@ -4,32 +4,13 @@ from metarag.pipelines.generator import (
     GeneratorInterface,
 )
 
-
+import pytest
 # ============================================================
 # Fake Generators
 # ============================================================
 
-class FakeGenerator(GeneratorInterface):
+from metarag.utils import FakeGenerator , RetryGenerator , AlwaysFailGenerator
 
-    def generate(self, prompt: str) -> str:
-
-        return "This is a generated answer."
-
-
-class RetryGenerator(GeneratorInterface):
-
-    def __init__(self):
-
-        self.calls = 0
-
-    def generate(self, prompt):
-
-        self.calls += 1
-
-        if self.calls < 3:
-            raise Exception("temporary failure")
-
-        return "Recovered"
 
 
 class RateLimitGenerator(GeneratorInterface):
@@ -47,12 +28,6 @@ class RateLimitGenerator(GeneratorInterface):
 
         return "Recovered"
 
-
-class AlwaysFailGenerator(GeneratorInterface):
-
-    def generate(self, prompt):
-
-        raise RuntimeError("Fatal Error")
 
 
 # ============================================================

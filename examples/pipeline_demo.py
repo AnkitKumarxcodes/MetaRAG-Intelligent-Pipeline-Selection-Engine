@@ -20,32 +20,12 @@ from metarag.pipelines.pipeline import (
     Reranker,
 )
 
-from metarag.pipelines.generator import (
-    OllamaGenerator,
-)
-
-from sentence_transformers import SentenceTransformer
-
 
 # ============================================================
 # Embedding Wrapper
 # ============================================================
 
-class SentenceTransformerEmbedding:
-
-    model_name = "all-MiniLM-L6-v2"
-
-    def __init__(self):
-
-        self.model = SentenceTransformer(self.model_name)
-
-    def embed_query(self, text):
-
-        return self.model.encode(text).tolist()
-
-    def embed_documents(self, texts):
-
-        return self.model.encode(texts).tolist()
+from metarag.utils import FakeEmbeddings
 
 
 # ============================================================
@@ -81,7 +61,7 @@ print(f"Chunks Generated : {len(chunks)}")
 # ============================================================
 
 embedder = CachedEmbeddings(
-    SentenceTransformerEmbedding()
+    FakeEmbeddings()
 )
 
 embeddings = embedder.embed_documents(
@@ -116,10 +96,9 @@ retriever = DenseRetriever(
 # ============================================================
 # Generator
 # ============================================================
+from metarag.utils import FakeGenerator
 
-generator = OllamaGenerator(
-    model="mistral:latest"
-)
+generator = FakeGenerator()
 
 
 reranker = Reranker()
@@ -163,7 +142,7 @@ for pipe in pipelines:
 
     print("\n" + "=" * 70)
 
-    print(pipe.name.upper())
+    print(f"Pipeline: {pipe.name}")
 
     print("=" * 70)
 

@@ -9,24 +9,8 @@ import pytest
 
 from metarag.defaults import DEFAULTS, MetaRAGDefaults
 from metarag import HybridRetriever, Chunk, InMemoryVectorDB
+from metarag.utils import FakeEmbeddings 
 
-
-class FakeEmbeddings:
-    def __init__(self, dim: int = 8):
-        self.dim = dim
-
-    def _vec(self, text: str):
-        import hashlib
-        vec = [0.0] * self.dim
-        for word in text.lower().split():
-            h = int(hashlib.md5(word.encode()).hexdigest(), 16)
-            vec[h % self.dim] += 1.0
-        norm = sum(v * v for v in vec) ** 0.5 or 1.0
-        return [v / norm for v in vec]
-
-    def embed(self, text): return self._vec(text)
-    def embed_query(self, text): return self._vec(text)
-    def embed_documents(self, texts): return [self._vec(t) for t in texts]
 
 
 @pytest.fixture(autouse=True)

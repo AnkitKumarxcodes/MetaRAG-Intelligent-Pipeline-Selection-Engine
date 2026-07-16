@@ -1,0 +1,150 @@
+{
+  "project": "MetaRAG",
+  "version": "0.3.0",
+  "documents": [
+    {
+      "id": 1,
+      "title": "Technical Section 1",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Technical Section 2",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Technical Section 3",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Technical Section 4",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Technical Section 5",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Technical Section 6",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Technical Section 7",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Technical Section 8",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Technical Section 9",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Technical Section 10",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Technical Section 11",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Technical Section 12",
+      "content": "MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.MetaRAG is a modular Retrieval-Augmented Generation framework focused on benchmarking retrieval pipelines, experimenting with chunking strategies, evaluating retrieval quality, and evolving routing decisions using collected performance signals. The document includes repeated technical content so that chunkers, retrievers, vector databases, and evaluators have sufficient text to operate during automated tests.",
+      "tags": [
+        "rag",
+        "retrieval",
+        "benchmark",
+        "router",
+        "evaluation"
+      ]
+    }
+  ]
+}

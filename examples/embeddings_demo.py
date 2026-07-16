@@ -8,33 +8,15 @@ from metarag import CachedEmbeddings
 # (Replace with SentenceTransformer/OpenAI later if desired)
 # ============================================================
 
-class DemoEmbeddingModel:
+from metarag.utils import FakeEmbeddings
 
-    model_name = "demo-embedding-model"
-
-    def embed_query(self, text):
-
-        print(f"Embedding query  : {text}")
-
-        return [float(len(text)), 1.0, 2.0]
-
-    def embed_documents(self, texts):
-
-        print(f"Embedding {len(texts)} documents...")
-
-        return [
-            [float(len(t)), 1.0, 2.0]
-            for t in texts
-        ]
-
-
-CACHE_DIR = Path(".metarag/demo_embedding_cache")
+CACHE_DIR = Path(".metarag/fake_embeddings_cache")
 
 print("=" * 65)
 print("MetaRAG Cached Embeddings Demo")
 print("=" * 65)
 
-model = DemoEmbeddingModel()
+model = FakeEmbeddings()
 
 embedder = CachedEmbeddings(
     model=model,

@@ -12,60 +12,13 @@ from metarag.pipelines.pipeline import (
     PIPELINE_REGISTRY,
     available_pipelines,
 )
+import pytest
 
 
 # ============================================================
 # Fake Components
 # ============================================================
-
-class FakeGenerator:
-
-    def generate(self, prompt: str):
-
-        if "Generate" in prompt:
-            return (
-                "What is AI?\n"
-                "Explain Artificial Intelligence.\n"
-                "Define AI."
-            )
-
-        if "Hypothetical answer" in prompt:
-            return "Artificial Intelligence is the simulation of human intelligence."
-
-        return "Generated Answer"
-
-
-class FailingGenerator:
-
-    def generate(self, prompt):
-
-        raise RuntimeError("Generator failed")
-
-
-class FakeRetriever:
-
-    def retrieve(self, query, k=4):
-
-        return [
-
-            ("Chunk A about AI", 0.95),
-
-            ("Chunk B about ML", 0.91),
-
-            ("Chunk C about Deep Learning", 0.83),
-
-            ("Chunk D about NLP", 0.72),
-
-            ("Chunk E", 0.55),
-
-        ][:k]
-
-
-class FakeReranker:
-
-    def rerank(self, query, chunks, k=None):
-
-        return list(reversed(chunks[:k]))
+from metarag.utils import  FakeGenerator , AlwaysFailGenerator , FakeRetriever , FakeReranker,FakeSklearnModel
 
 
 # ============================================================
@@ -89,7 +42,7 @@ def test_multiquery_expands():
 def test_multiquery_failure_returns_original():
 
     mq = MultiQuery(
-        FailingGenerator(),
+        AlwaysFailGenerator(),
         n=3,
     )
 
@@ -120,7 +73,7 @@ def test_hyde_generates_hypothesis():
 def test_hyde_failure_returns_query():
 
     hyde = HyDE(
-        FailingGenerator()
+        AlwaysFailGenerator()
     )
 
     text = hyde.generate_hypothesis(
@@ -375,7 +328,7 @@ def test_hyde_pipeline_failure():
 
         FakeRetriever(),
 
-        FailingGenerator(),
+        AlwaysFailGenerator(),
 
     )
 
