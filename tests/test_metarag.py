@@ -54,6 +54,16 @@ def benchmarked_rag(rag):
     return rag
 
 
+@pytest.fixture(autouse=True)
+def _restore_router(rag):
+    """rag and benchmarked_rag are the SAME module-scoped instance — tests
+    that call set_router()/set_router_from_model() were mutating it
+    permanently, making later tests depend on file execution order."""
+    original = rag._router
+    yield
+    rag._router = original
+
+
 # ─────────────────────────────────────────────────────────
 # fit()
 # ─────────────────────────────────────────────────────────
@@ -219,8 +229,9 @@ def test_pipeline_graph_all(rag):
         assert f"[{name}]" in output
 
 
-def test_pipeline_graph_unknown():
-    fresh_output_check = "[pipeline_graph] Unknown pipeline"
+def test_pipeline_graph_unknown(rag):
+    output = rag.pipeline_graph("does_not_exist")
+    assert "Unknown pipeline" in output
 
 
 def test_dashboard_returns_summary(benchmarked_rag):
@@ -250,6 +261,8 @@ def test_trace_returns_steps(rag):
 
 
 def test_trace_full_pipeline_has_all_stages(rag):
+    if "full" not in rag._pipelines:
+        pytest.skip("sentence-transformers not installed — 'full' pipeline not built")
     steps = rag.trace("What is this document about?", pipeline_name="full")
     stage_names = [s["stage"] for s in steps]
     assert "MultiQuery" in stage_names
@@ -377,3 +390,125 @@ def test_rebuild_refits(rag):
 def test_repr_does_not_crash(rag):
     text = repr(rag)
     assert "MetaRAG" in text
+
+
+# ─────────────────────────────────────────────────────────
+# Constructor-level duck-typing guards
+# ─────────────────────────────────────────────────────────
+
+def test_constructor_rejects_invalid_embeddings():
+    class Bad: pass
+    with pytest.raises(TypeError):
+        MetaRAG(docs=str(DATA_DIR), embeddings=Bad(), generator=FakeGenerator(), verbose=False)
+
+
+def test_constructor_rejects_invalid_generator():
+    class Bad: pass
+    with pytest.raises(TypeError):
+        MetaRAG(docs=str(DATA_DIR), embeddings=FakeEmbeddings(), generator=Bad(), verbose=False)
+
+
+def test_set_embeddings_rejects_invalid():
+    class Bad: pass
+    rag_instance = MetaRAG(docs=str(DATA_DIR), embeddings=FakeEmbeddings(), generator=FakeGenerator(), verbose=False)
+    with pytest.raises(TypeError):
+        rag_instance.set_embeddings(Bad())
+
+
+# ─────────────────────────────────────────────────────────
+# benchmark(retrieval_only=False) — the generator-scoring branch
+# ─────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def full_scored_rag(tmp_path_factory):
+    """Separate instance so retrieval_only=False benchmarking doesn't
+    overwrite the shared rag/benchmarked_rag fixtures' benchmark.csv."""
+    project_dir = tmp_path_factory.mktemp("full_scored_project")
+    instance = MetaRAG(
+        docs=str(DATA_DIR), embeddings=FakeEmbeddings(), generator=FakeGenerator(),
+        project=f"test_full_{project_dir.name}", k=3, verbose=False,
+    )
+    instance.fit()
+    instance.benchmark(QUERIES[:1], retrieval_only=False, train_router=False, save_csv=True)
+    return instance
+
+
+def test_benchmark_retrieval_only_false_scores_with_generator(full_scored_rag):
+    df = full_scored_rag.get_benchmark_data()
+    assert {"faithfulness", "relevancy", "composite"}.issubset(df.columns)
+
+
+def test_leaderboard_uses_llm_metrics_header_when_present(full_scored_rag):
+    summary = full_scored_rag.leaderboard(source="benchmark")
+    assert "faithfulness" in summary.columns
+
+
+# ─────────────────────────────────────────────────────────
+# dashboard() — no benchmark data yet
+# ─────────────────────────────────────────────────────────
+
+def test_dashboard_no_benchmark_data_returns_none(tmp_path_factory):
+    project_dir = tmp_path_factory.mktemp("never_benchmarked_dashboard")
+    fresh = MetaRAG(docs=str(DATA_DIR), embeddings=FakeEmbeddings(), generator=FakeGenerator(),
+                     project=f"test_{project_dir.name}", verbose=False)
+    fresh.fit()
+    assert fresh.dashboard() is None
+
+
+# ─────────────────────────────────────────────────────────
+# trace() — fallback pipeline, unknown pipeline, HyDE stage
+# ─────────────────────────────────────────────────────────
+
+def test_trace_defaults_to_router_or_first_pipeline(rag):
+    steps = rag.trace("What is this document about?")   # no pipeline_name given
+    assert len(steps) > 0
+
+
+def test_trace_unknown_pipeline_returns_empty_list(rag):
+    assert rag.trace("test", pipeline_name="does_not_exist") == []
+
+
+def test_trace_reports_hyde_stage(rag):
+    from metarag.pipelines.pipeline import HyDEPipeline
+    rag._pipelines["_hyde_probe"] = HyDEPipeline(rag._retrievers["hybrid"], FakeGenerator())
+    try:
+        steps = rag.trace("What is this document about?", pipeline_name="_hyde_probe")
+        stage_names = [s["stage"] for s in steps]
+        assert "HyDE" in stage_names
+    finally:
+        del rag._pipelines["_hyde_probe"]   # don't leak into other tests
+
+
+# ─────────────────────────────────────────────────────────
+# analyze_corpus() before fit() / empty corpus at fit()
+# ─────────────────────────────────────────────────────────
+
+def test_analyze_corpus_before_fit_returns_not_fitted():
+    fresh = MetaRAG(docs=str(DATA_DIR), embeddings=FakeEmbeddings(), generator=FakeGenerator(), verbose=False)
+    assert fresh.analyze_corpus() == {"status": "not fitted"}
+
+
+def test_fit_empty_directory_raises_value_error(tmp_path):
+    empty_dir = tmp_path / "empty_docs"
+    empty_dir.mkdir()
+    fresh = MetaRAG(docs=str(empty_dir), embeddings=FakeEmbeddings(), generator=FakeGenerator(), verbose=False)
+    with pytest.raises(ValueError):
+        fresh.fit()
+
+
+# ─────────────────────────────────────────────────────────
+# SklearnRouterAdapter — guard + explain()
+# ─────────────────────────────────────────────────────────
+
+def test_sklearn_router_adapter_rejects_model_without_predict():
+    from metarag.metarag import SklearnRouterAdapter
+    class NoPredict: pass
+    with pytest.raises(TypeError):
+        SklearnRouterAdapter(NoPredict(), feature_cols=["max_similarity"])
+
+
+def test_sklearn_router_adapter_explain():
+    from metarag.metarag import SklearnRouterAdapter
+    adapter = SklearnRouterAdapter(FakeSklearnModel(), feature_cols=["max_similarity"])
+    result = adapter.explain("straight")
+    assert "straight" in result and "FakeSklearnModel" in result

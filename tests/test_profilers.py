@@ -150,3 +150,16 @@ def test_probe_profiler_empty_index_returns_empty_shape():
     result = probe.probe("test query")
     assert result["avg_similarity"] == 0.0
     assert result["max_similarity"] == 0.0
+
+
+def test_probe_profiler_search_exception_returns_empty_shape():
+    class BrokenVectorDB:
+        def search(self, query_embedding, k=5):
+            raise RuntimeError("index corrupted")
+
+    probe = ProbeProfiler(BrokenVectorDB(), FakeEmbeddings(), k=5)
+    result = probe.probe("test query")
+    assert result == {
+        "avg_similarity": 0.0, "max_similarity": 0.0,
+        "similarity_variance": 0.0, "redundancy": 0.0,
+    }

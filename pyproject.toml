@@ -66,8 +66,8 @@ Repository = "https://github.com/AnkitKumarxcodes/metarag-sdk"
 
 [tool.setuptools_scm]
 fallback_version = "0.0.0"
-# Reads version from the latest git tag (e.g. tag "v0.3.0" -> version "0.3.0").
-# No .git present -> falls back to 0.0.0 automatically.
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -194,6 +194,29 @@ def test_document_order_preserved(tmp_path):
 
     vectors = embedder.embed_documents(texts)
 
-    assert [len(texts),1,2]
-    assert [len(texts),1,0]
-    assert [len(texts),2,0]
+    expected = [embedder.embed_query(t) for t in texts]
+    assert vectors == expected
+
+# ─────────────────────────────────────────────────────────
+# _get_model_name() fallback branches
+# ─────────────────────────────────────────────────────────
+
+def test_model_name_falls_back_to_model_attribute(tmp_path):
+
+    class ModelWithModelAttr:
+        model = "some-underlying-model-id"
+        def embed_query(self, text): return [0.0]
+        def embed_documents(self, texts): return [[0.0] for _ in texts]
+
+    embedder = CachedEmbeddings(ModelWithModelAttr(), cache_dir=tmp_path)
+    assert embedder.model_name == "some-underlying-model-id"
+
+
+def test_model_name_falls_back_to_class_name(tmp_path):
+
+    class NoNameHints:
+        def embed_query(self, text): return [0.0]
+        def embed_documents(self, texts): return [[0.0] for _ in texts]
+
+    embedder = CachedEmbeddings(NoNameHints(), cache_dir=tmp_path)
+    assert embedder.model_name == "NoNameHints"

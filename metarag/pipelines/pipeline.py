@@ -33,7 +33,7 @@ Return one question per line, no numbering, no bullets.
 Question: {query}
 """
 
-    def __init__(self, generator, n: int = 3):
+    def __init__(self, generator, n: int = None):
         self.generator = generator
         self.n = n if n is not None else DEFAULTS.as_single("multiquery_n_variants")
 
@@ -145,7 +145,7 @@ class Deduplicator:
     threshold: 0.0 = remove nothing, 1.0 = remove everything similar
     """
 
-    def __init__(self, threshold: float = 0.85):
+    def __init__(self, threshold: float = None):
         self.threshold = threshold if threshold is not None else DEFAULTS.as_single("dedup_threshold")
 
     def deduplicate(self, chunks: List[Any]) -> List[Any]:

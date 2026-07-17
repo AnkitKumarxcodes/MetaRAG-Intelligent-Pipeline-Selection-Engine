@@ -110,3 +110,79 @@ def test_document_metadata():
         assert isinstance(doc.metadata, dict)
 
         assert "source" in doc.metadata
+
+# ─────────────────────────────────────────────────────────
+# names() / load_pdfs() / load_texts() / load_jsons() / load_format()
+# ─────────────────────────────────────────────────────────
+
+def test_names_returns_loaded_and_skipped_dict():
+
+    loader = DocumentLoader(DATA_DIR)
+    loader.load(verbose=False)
+
+    result = loader.names()
+
+    assert set(result.keys()) == {"loaded", "skipped"}
+    assert isinstance(result["loaded"], dict)
+
+
+def test_names_filters_by_which():
+
+    loader = DocumentLoader(DATA_DIR)
+    loader.load(verbose=False)
+
+    result = loader.names(which="loaded")
+
+    assert set(result.keys()) == {"loaded"}
+
+
+def test_names_filters_by_extension():
+
+    loader = DocumentLoader(DATA_DIR)
+    loader.load(verbose=False)
+
+    if "txt" in loader.loaded:
+        result = loader.names(which="loaded", ext="txt")
+        assert list(result["loaded"].keys()) == ["txt"]
+
+
+def test_load_texts_returns_only_txt_docs():
+
+    loader = DocumentLoader(DATA_DIR)
+    docs = loader.load_texts()
+
+    for doc in docs:
+        assert doc.metadata.get("type") == "txt"
+
+
+def test_load_jsons_returns_only_json_docs():
+
+    loader = DocumentLoader(DATA_DIR)
+    docs = loader.load_jsons()
+
+    for doc in docs:
+        assert doc.metadata.get("type") == "json"
+
+
+def test_load_pdfs_returns_only_pdf_docs():
+
+    loader = DocumentLoader(DATA_DIR)
+    docs = loader.load_pdfs()
+
+    for doc in docs:
+        assert doc.metadata.get("type") == "pdf"
+
+
+def test_load_format_filters_by_arbitrary_type():
+
+    loader = DocumentLoader(DATA_DIR)
+    docs = loader.load_format("markdown")
+
+    for doc in docs:
+        assert doc.metadata.get("type") == "markdown"
+
+
+def test_loader_missing_path_raises():
+
+    with pytest.raises(FileNotFoundError):
+        DocumentLoader("/definitely/does/not/exist")

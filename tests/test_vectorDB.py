@@ -86,3 +86,57 @@ def test_zero_vector_query_does_not_crash(built_vdb):
     zero_query = [0.0] * built_vdb.embeddings.shape[1]
     results = built_vdb.search(zero_query, k=3)
     assert len(results) == 3
+
+# ─────────────────────────────────────────────────────────
+# Shape-mismatch guard
+# ─────────────────────────────────────────────────────────
+
+def test_search_shape_mismatch_raises(built_vdb):
+    with pytest.raises(ValueError):
+        built_vdb.search([0.1, 0.2], k=3)   # wrong dimensionality
+
+
+# ─────────────────────────────────────────────────────────
+# ChromaVectorDB (optional dep — skip if chromadb not installed)
+# ─────────────────────────────────────────────────────────
+
+def test_chroma_build_search_add(tmp_path, chunks, embeddings):
+    pytest.importorskip("chromadb")
+    from metarag import ChromaVectorDB
+
+    db = ChromaVectorDB(persist_directory=str(tmp_path / "chroma_index"))
+    chunk_embeddings = embeddings.embed_documents([c.text for c in chunks])
+    db.build(chunks, chunk_embeddings)
+
+    results = db.search(embeddings.embed_query("What is the main topic?"), k=3)
+    assert len(results) == 3
+    for chunk, score in results:
+        assert isinstance(score, float)
+
+    new_chunk = Chunk(text="Chroma marker chunk.", metadata={"source": "synthetic"})
+    db.add([new_chunk], [embeddings.embed_query(new_chunk.text)])
+    hits = db.search(embeddings.embed_query("marker chunk"), k=1)
+    assert "marker" in hits[0][0].text.lower()
+
+
+# ─────────────────────────────────────────────────────────
+# FAISSVectorDB (optional dep — skip if faiss not installed)
+# ─────────────────────────────────────────────────────────
+
+def test_faiss_build_and_search(tmp_path, chunks, embeddings):
+    pytest.importorskip("faiss")
+    from metarag import FAISSVectorDB
+
+    db = FAISSVectorDB()
+    chunk_embeddings = embeddings.embed_documents([c.text for c in chunks])
+    db.build(chunks, chunk_embeddings)
+
+    results = db.search(embeddings.embed_query("What is the main topic?"), k=3)
+    assert len(results) == 3
+
+    save_path = str(tmp_path / "faiss_index.bin")
+    db.save(save_path)
+    reloaded = FAISSVectorDB()
+    reloaded.chunks = chunks   # index file only stores vectors, not chunk objects
+    reloaded.load(save_path)
+    assert len(reloaded.search(embeddings.embed_query("main topic"), k=2)) == 2

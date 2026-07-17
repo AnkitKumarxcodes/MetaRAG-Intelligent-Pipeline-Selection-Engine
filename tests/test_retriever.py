@@ -7,7 +7,6 @@ index per retriever).
 """
 
 from pathlib import Path
-import requests
 import pytest
 
 from metarag import (
@@ -160,3 +159,26 @@ def test_all_retrievers_return_valid_chunks(bm25, dense, hybrid, mmr):
         for chunk, score in results:
             text = chunk.text if hasattr(chunk, "text") else str(chunk)
             assert isinstance(text, str) and len(text) > 0
+
+# ─────────────────────────────────────────────────────────
+# Empty-query guards
+# ─────────────────────────────────────────────────────────
+
+def test_bm25_empty_query_returns_empty_list(bm25):
+    assert bm25.retrieve("", k=3) == []
+
+
+def test_dense_empty_query_returns_empty_list(dense):
+    assert dense.retrieve("   ", k=3) == []
+
+
+def test_mmr_empty_query_returns_empty_list(mmr):
+    assert mmr.retrieve("", k=3) == []
+
+
+def test_hybrid_returns_empty_when_both_retrievers_empty(chunks, embeddings, built_vdb):
+    """Regression check for the 'neither retriever returned anything' guard —
+    an empty query makes BOTH BM25 and Dense return [], so hybrid must not
+    crash on max([]) and should return [] instead."""
+    hybrid = HybridRetriever(chunks, embeddings, built_vdb)
+    assert hybrid.retrieve("", k=3) == []

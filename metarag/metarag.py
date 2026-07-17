@@ -840,7 +840,7 @@ class MetaRAG:
 
         if docs.skipped:   # NEW — surface skip info through MetaRAG's own logger, since loader stayed quiet
             for ext, info in docs.skipped.items():
-                self._log(f"⚠️  Skipped {info['count']} .{ext} file(s) — missing optional dependency")
+                self._log(f"⚠️  Skipped {info.count} .{ext} file(s) — missing optional dependency")
 
 
         self._log("Chunking...")
