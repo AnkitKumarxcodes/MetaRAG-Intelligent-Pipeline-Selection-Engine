@@ -121,8 +121,9 @@ class MetaRAG:
     component (embeddings, generator, vector_db, router) — MetaRAG
     wires them together, it doesn't own the logic of any one of them.
     """
+    from . import __version__
 
-    VERSION = "0.3.0"
+    VERSION = __version__
 
     def __init__(
         self,

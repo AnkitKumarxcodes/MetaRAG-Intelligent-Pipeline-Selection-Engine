@@ -33,26 +33,67 @@ class CorpusProfiler:
 
         texts   = [_text(c) for c in chunks if _text(c).strip()]
         lengths = [len(t) for t in texts]
+        ocr_texts = [
+            _text(c)
+            for c in chunks
+            if _text(c).strip() and self._is_ocr_candidate(c)
+        ]
 
         return {
             "num_docs":         len(texts),
             "avg_chunk_length": round(sum(lengths) / len(lengths), 2) if lengths else 0,
-            "ocr_ratio":        round(self._ocr_ratio(texts), 3),
+            "ocr_ratio":         (
+                                    round(self._ocr_ratio(ocr_texts), 3)
+                                    if ocr_texts else None
+                                ),
             "duplicate_ratio":  round(self._duplicate_ratio(texts), 3),
             "numeric_ratio":    round(self._numeric_ratio(texts), 3),
             "short_doc_ratio":  round(self._short_doc_ratio(lengths), 3),
         }
+    
+    def _is_ocr_candidate(self, chunk) -> bool:
+        doc_type = getattr(chunk, "metadata", {}).get("type", "").lower()
+        return doc_type in {
+            "pdf",
+            "image",
+            "scanned_pdf",
+        }
 
     def _ocr_ratio(self, texts: List[str]) -> float:
-        """Chunks with many single-char words = likely OCR noise."""
         noisy = 0
+
         for t in texts:
             words = t.split()
             if not words:
                 continue
+
             single_chars = sum(1 for w in words if len(w) == 1)
-            if single_chars / len(words) > 0.25:
+
+            broken_words = len(
+                            re.findall(r"(?:\b[a-zA-Z]\b\s+){2,}\b[a-zA-Z]\b", t)
+                        )
+
+            replacement_chars = t.count("�")
+
+            punctuation_runs = len(re.findall(r"[^\w\s]{4,}", t))
+
+            score = 0
+
+            if single_chars / len(words) > 0.35:
+                score += 1
+
+            if broken_words > 5:
+                score += 1
+
+            if replacement_chars > 0:
+                score += 2
+
+            if punctuation_runs > 3:
+                score += 1
+
+            if score >= 2:
                 noisy += 1
+
         return noisy / len(texts) if texts else 0.0
 
     def _duplicate_ratio(self, texts: List[str]) -> float:

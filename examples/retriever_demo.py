@@ -6,7 +6,7 @@ prints their top results side by side so you can directly compare them.
 """
 
 from pathlib import Path
-import requests
+# import requests
 
 from metarag import (
     DocumentLoader, Chunker, CachedEmbeddings, InMemoryVectorDB,
