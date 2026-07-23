@@ -138,6 +138,7 @@ class MetaRAG:
         k: int = None,
         eval_preset: str = None,
         verbose: bool = True,
+        
     ):
         """
         Args:
@@ -167,6 +168,9 @@ class MetaRAG:
         self.docs_path = docs
         self.embeddings = embeddings
         self.generator = generator
+        self._pipeline_builders = {}
+        self._pipeline_cache = {}
+        self._reranker = None
 
         from .pipelines.generator import GeneratorWrapper
         self._generator_wrapper = GeneratorWrapper(generator, model_name=generator.__class__.__name__)
@@ -211,7 +215,6 @@ class MetaRAG:
         self._chunks = None
         self._corpus_profile = None
         self._retrievers = {}
-        self._pipelines = {}
         self._evaluator = None
         self._router = None
         self._fitted = False
@@ -222,8 +225,15 @@ class MetaRAG:
     # ═════════════════════════════════════════════════════════
     # CORE LIFECYCLE
     # ═════════════════════════════════════════════════════════
-
+    def _get_reranker(self):
+        if self._reranker is None:
+            from .pipelines.pipeline import Reranker
+            self._reranker = Reranker()
+        return self._reranker
+    
     def fit(self, force: bool = False) -> "MetaRAG":
+        self._pipeline_cache.clear()
+        self._reranker = None
         """Load documents → chunk → embed → index → build pipelines."""
         t0 = time.time()
         self._log("fit() starting...")
@@ -250,9 +260,15 @@ class MetaRAG:
             features = self._extract_query_features(query)
             pipeline_name = self._router.route(features)
         else:
-            pipeline_name = next(iter(self._pipelines))  # no hardcoded "hybrid" — just take whatever exists first
+            pipeline_name = next(iter(self._pipeline_builders))  # no hardcoded "hybrid" — just take whatever exists first
 
-        pipeline = self._pipelines.get(pipeline_name) or next(iter(self._pipelines.values()))
+        try:
+            pipeline = self._get_pipeline(pipeline_name)
+        except ValueError:
+            fallback = next(iter(self._pipeline_builders))
+            pipeline = self._get_pipeline(fallback)
+            pipeline_name = fallback
+
         pipeline_result = pipeline.run(query, k=self.k)
         chunks = pipeline_result["chunks"]
         chunk_texts = [c[0] if isinstance(c, tuple) else str(c) for c in chunks]
@@ -290,7 +306,7 @@ class MetaRAG:
         self._check_fitted()
         t0 = time.time()
         self._log(f"benchmark() starting on {len(queries)} queries "
-                   f"({len(self._pipelines)} pipelines, retrieval_only={retrieval_only})...")
+                   f"({len(self._pipeline_builders)} pipelines, retrieval_only={retrieval_only})...")
 
         from .Evaluator.metrics import precision, coverage, redundancy as chunk_redundancy_fn
         from .router.query_profiler import QueryProfiler
@@ -309,7 +325,8 @@ class MetaRAG:
             pipeline_scores = {}
             query_results = []
 
-            for pipeline_name, pipeline in self._pipelines.items():
+            for pipeline_name in self._pipeline_builders:
+                pipeline = self._get_pipeline(pipeline_name)
                 retrieval_t0 = time.time()
                 pipeline_result = pipeline.run(query, k=self.k)
                 retrieval_ms = round((time.time() - retrieval_t0) * 1000, 2)
@@ -387,7 +404,8 @@ class MetaRAG:
             "chunk_overlap": self.chunk_overlap,
             "k": self.k,
             "eval_preset": self.eval_preset,
-            "pipelines": list(self._pipelines.keys()),
+            "registered_pipelines": list(self._pipeline_builders.keys()),
+            "loaded_pipelines": list(self._pipeline_cache.keys()),
             "queries_logged": len(logs),
             "avg_score": avg_score,
             "router": router_status,
@@ -516,7 +534,7 @@ class MetaRAG:
             )
             confidence = self._router.__class__.__name__
         else:
-            pipeline_name = next(iter(self._pipelines))
+            pipeline_name = next(iter(self._pipeline_builders))
             explanation = "no router configured — using first available pipeline"
             confidence = "none"
 
@@ -526,7 +544,7 @@ class MetaRAG:
             "confidence": confidence,
             "explanation": explanation,
             "features": features,
-            "available_pipelines": list(self._pipelines.keys()),
+            "available_pipelines": list(self._pipeline_builders.keys()),
         }
 
     # ═════════════════════════════════════════════════════════
@@ -540,11 +558,11 @@ class MetaRAG:
         If pipeline_name is None, shows every built pipeline.
         """
         self._check_fitted()
-        names = [pipeline_name] if pipeline_name else list(self._pipelines.keys())
+        names = [pipeline_name] if pipeline_name else list(self._pipeline_builders.keys())
         output_lines = []
 
         for name in names:
-            pipeline = self._pipelines.get(name)
+            pipeline = self._get_pipeline(name)
             if pipeline is None:
                 output_lines.append(f"[pipeline_graph] Unknown pipeline: '{name}'")
                 continue
@@ -642,9 +660,9 @@ class MetaRAG:
         self._check_fitted()
         pipeline_name = pipeline_name or (
             self._router.route(self._extract_query_features(query))
-            if self._router is not None else next(iter(self._pipelines))
+            if self._router is not None else next(iter(self._pipeline_builders))
         )
-        pipeline = self._pipelines.get(pipeline_name)
+        pipeline = self._get_pipeline(pipeline_name)
         if pipeline is None:
             print(f"[trace] Unknown pipeline: '{pipeline_name}'")
             return []
@@ -815,6 +833,8 @@ class MetaRAG:
     def rebuild(self, force: bool = True) -> "MetaRAG":
         """Force a full re-fit()."""
         self._log("Rebuilding index and pipelines...")
+        self._pipeline_cache.clear()
+        self._reranker = None
         return self.fit(force=force)
 
     # ═════════════════════════════════════════════════════════
@@ -875,6 +895,7 @@ class MetaRAG:
             json.dump(self._corpus_profile, f, indent=2)
 
     def _setup_retrievers(self):
+        self._retrievers.clear()
         from .core.retriever import BM25Retriever, DenseRetriever, HybridRetriever, MMRRetriever
         if not self._chunks:
             raise ValueError("No chunks available. Run fit() on a non-empty corpus.")
@@ -887,29 +908,57 @@ class MetaRAG:
         self._log(f"{len(self._retrievers)} retrievers ready")
 
     def _setup_pipelines(self):
+        self._pipeline_builders.clear()
         from .pipelines.pipeline import (
-            StraightPipeline, MultiQueryPipeline, RerankedPipeline, FullPipeline, Reranker,
+            StraightPipeline,
+            MultiQueryPipeline,
+            RerankedPipeline,
+            FullPipeline,
         )
 
+        # Straight pipelines
         for retriever_name, retriever in self._retrievers.items():
-            self._pipelines[retriever_name] = StraightPipeline(retriever, name=retriever_name)
-
-        try:
-            reranker = Reranker()
-            self._pipelines["reranked"] = RerankedPipeline(self._retrievers["hybrid"], reranker)
-            self._pipelines["full"] = FullPipeline(
-                self._retrievers["hybrid"], self.generator, reranker,
-                n_variants=DEFAULTS.as_single("multiquery_n_variants"),
+            self._pipeline_builders[retriever_name] = (
+                lambda r=retriever, n=retriever_name:
+                    StraightPipeline(r, name=n)
             )
-        except ImportError:
-            self._log("⚠️  sentence-transformers not available — reranked/full pipelines skipped")
 
-        self._pipelines["multiquery"] = MultiQueryPipeline(
-            self._retrievers["hybrid"], self.generator,
+        # MultiQuery
+        self._pipeline_builders["multiquery"] = lambda: MultiQueryPipeline(
+            self._retrievers["hybrid"],
+            self.generator,
             n_variants=DEFAULTS.as_single("multiquery_n_variants"),
         )
 
-        self._log(f"{len(self._pipelines)} pipelines ready: {list(self._pipelines.keys())}")
+        # Reranked
+        self._pipeline_builders["reranked"] = lambda: RerankedPipeline(
+            self._retrievers["hybrid"],
+            self._get_reranker(),
+        )
+
+        #Full
+        self._pipeline_builders["full"] = lambda: FullPipeline(
+            self._retrievers["hybrid"],
+            self.generator,
+            self._get_reranker(),
+            n_variants=DEFAULTS.as_single("multiquery_n_variants"),
+        )
+
+        self._log(
+            f"{len(self._pipeline_builders)} pipelines registered: "
+            f"{list(self._pipeline_builders.keys())}"
+        )
+    
+    def _get_pipeline(self, pipeline_name: str):
+        if pipeline_name not in self._pipeline_cache:
+            builder = self._pipeline_builders.get(pipeline_name)
+
+            if builder is None:
+                raise ValueError(f"Unknown pipeline '{pipeline_name}'")
+
+            self._pipeline_cache[pipeline_name] = builder()
+
+        return self._pipeline_cache[pipeline_name]
 
     def _setup_evaluator(self):
         from .Evaluator.evaluator import Evaluator
@@ -968,7 +1017,10 @@ class MetaRAG:
     def __repr__(self):
         router_status = self._router.__class__.__name__ if self._router is not None else "none"
         return (
-            f"MetaRAG(project='{self.project}', fitted={self._fitted}, "
+            f"MetaRAG(project='{self.project}', "
+            f"fitted={self._fitted}, "
             f"chunks={len(self._chunks) if self._chunks else 0}, "
-            f"pipelines={len(self._pipelines)}, router={router_status})"
+            f"registered={len(self._pipeline_builders)}, "
+            f"loaded={len(self._pipeline_cache)}, "
+            f"router={router_status})"
         )
