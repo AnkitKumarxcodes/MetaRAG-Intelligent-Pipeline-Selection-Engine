@@ -1,6 +1,5 @@
 <div align="center">
-<img src="assets/metarag_logo.svg" width="680" alt="MetaRAG SDK — Intelligent Pipeline Selection Engine"/>
-
+<img src="https://raw.githubusercontent.com/AnkitKumarxcodes/metarag-sdk/main/assets/metarag_logo.svg" width="680" alt="MetaRAG SDK — Intelligent Pipeline Selection Engine"/>
 
 <br/>
 

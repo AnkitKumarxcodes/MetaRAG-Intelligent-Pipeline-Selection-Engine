@@ -24,7 +24,9 @@ from metarag import OllamaGenerator
 ## 2. Create the Framework
 
 ```python
-embeddings = CachedEmbeddings(...)
+from langchain_ollama import OllamaEmbeddings
+
+embeddings = CachedEmbeddings(OllamaEmbeddings(model="nomic-embed-text") , cache_dir=str(BASE_DIR / ".metarag" / "embeddings")) #Model and path to cache directory
 
 rag = MetaRAG(
     docs="tests/data",
