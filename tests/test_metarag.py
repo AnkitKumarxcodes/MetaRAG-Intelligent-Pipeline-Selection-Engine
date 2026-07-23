@@ -470,7 +470,10 @@ def test_trace_unknown_pipeline_returns_empty_list(rag):
 
 def test_trace_reports_hyde_stage(rag):
     from metarag.pipelines.pipeline import HyDEPipeline
-    rag._pipeline_builders["_hyde_probe"] = HyDEPipeline(rag._retrievers["hybrid"], FakeGenerator())
+    rag._pipeline_builders["_hyde_probe"] = lambda: HyDEPipeline(
+            rag._retrievers["hybrid"],
+            FakeGenerator()
+        )
     try:
         steps = rag.trace("What is this document about?", pipeline_name="_hyde_probe")
         stage_names = [s["stage"] for s in steps]

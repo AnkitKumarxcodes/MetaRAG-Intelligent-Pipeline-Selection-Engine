@@ -562,8 +562,9 @@ class MetaRAG:
         output_lines = []
 
         for name in names:
-            pipeline = self._get_pipeline(name)
-            if pipeline is None:
+            try:
+                pipeline = self._get_pipeline(name)
+            except ValueError:
                 output_lines.append(f"[pipeline_graph] Unknown pipeline: '{name}'")
                 continue
 
@@ -662,8 +663,9 @@ class MetaRAG:
             self._router.route(self._extract_query_features(query))
             if self._router is not None else next(iter(self._pipeline_builders))
         )
-        pipeline = self._get_pipeline(pipeline_name)
-        if pipeline is None:
+        try:
+            pipeline = self._get_pipeline(pipeline_name)
+        except ValueError:
             print(f"[trace] Unknown pipeline: '{pipeline_name}'")
             return []
 
