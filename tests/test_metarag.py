@@ -83,7 +83,7 @@ def test_fit_builds_retrievers(rag):
 
 def test_fit_builds_pipelines(rag):
     expected = {"bm25", "dense", "hybrid", "mmr", "reranked", "full", "multiquery"}
-    assert expected.issubset(set(rag._pipelines.keys()))
+    assert expected.issubset(set(rag._pipeline_builders.keys()))
 
 
 def test_fit_builds_evaluator(rag):
@@ -115,7 +115,7 @@ def test_ask_returns_answer(rag):
 
 def test_ask_pipeline_is_valid(rag):
     answer = rag.ask("What is this document about?")
-    assert answer.pipeline in rag._pipelines
+    assert answer.pipeline in rag._pipeline_builders
 
 
 def test_ask_score_is_float(rag):
@@ -141,7 +141,7 @@ def test_benchmark_returns_dataframe(benchmarked_rag):
 
 def test_benchmark_covers_all_pipelines(benchmarked_rag):
     df = benchmarked_rag.get_benchmark_data()
-    assert set(df["pipeline"].unique()) == set(benchmarked_rag._pipelines.keys())
+    assert set(df["pipeline"].unique()) == set(benchmarked_rag._pipeline_builders.keys())
 
 
 def test_benchmark_has_winning_pipeline_column(benchmarked_rag):
@@ -204,7 +204,7 @@ def test_analyze_corpus_structure(rag):
 def test_explain_structure(benchmarked_rag):
     result = benchmarked_rag.explain("What is this about?")
     assert "selected_pipeline" in result
-    assert result["selected_pipeline"] in benchmarked_rag._pipelines
+    assert result["selected_pipeline"] in benchmarked_rag._pipeline_builders
 
 
 def test_explain_no_router_fallback():
@@ -225,7 +225,7 @@ def test_pipeline_graph_single(rag):
 
 def test_pipeline_graph_all(rag):
     output = rag.pipeline_graph()
-    for name in rag._pipelines:
+    for name in rag._pipeline_builders:
         assert f"[{name}]" in output
 
 
@@ -237,7 +237,7 @@ def test_pipeline_graph_unknown(rag):
 def test_dashboard_returns_summary(benchmarked_rag):
     summary = benchmarked_rag.dashboard()
     assert summary is not None
-    assert len(summary) == len(benchmarked_rag._pipelines)
+    assert len(summary) == len(benchmarked_rag._pipeline_builders)
 
 
 def test_report_returns_corpus_profile(rag):
@@ -261,7 +261,7 @@ def test_trace_returns_steps(rag):
 
 
 def test_trace_full_pipeline_has_all_stages(rag):
-    if "full" not in rag._pipelines:
+    if "full" not in rag._pipeline_builders:
         pytest.skip("sentence-transformers not installed — 'full' pipeline not built")
     steps = rag.trace("What is this document about?", pipeline_name="full")
     stage_names = [s["stage"] for s in steps]
@@ -470,13 +470,13 @@ def test_trace_unknown_pipeline_returns_empty_list(rag):
 
 def test_trace_reports_hyde_stage(rag):
     from metarag.pipelines.pipeline import HyDEPipeline
-    rag._pipelines["_hyde_probe"] = HyDEPipeline(rag._retrievers["hybrid"], FakeGenerator())
+    rag._pipeline_builders["_hyde_probe"] = HyDEPipeline(rag._retrievers["hybrid"], FakeGenerator())
     try:
         steps = rag.trace("What is this document about?", pipeline_name="_hyde_probe")
         stage_names = [s["stage"] for s in steps]
         assert "HyDE" in stage_names
     finally:
-        del rag._pipelines["_hyde_probe"]   # don't leak into other tests
+        del rag._pipeline_builders["_hyde_probe"]   # don't leak into other tests
 
 
 # ─────────────────────────────────────────────────────────
