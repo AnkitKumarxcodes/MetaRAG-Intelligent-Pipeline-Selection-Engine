@@ -500,6 +500,103 @@ MetaRAG doesn't hardcode any specific model — any object satisfying `Embedding
 
 ---
 
+## 🚀 Intelligent Pipeline Routing
+
+Unlike traditional RAG systems that rely on a single retrieval strategy, **MetaRAG** analyzes every incoming query, extracts retrieval-aware features, and dynamically selects the most appropriate retrieval pipeline using a learned **XGBoost router**.
+
+```text
+                  User Query
+                       │
+                       ▼
+          Query Feature Extraction
+                       │
+                       ▼
+        Learned Router (XGBoost)
+                       │
+      ┌────────┬────────┬─────────┐
+      ▼        ▼        ▼         ▼
+    BM25      MMR     Dense     Hybrid
+      │
+      ▼
+ Lazy Pipeline Execution
+      │
+      ▼
+  Generated Answer
+```
+
+The router considers corpus statistics, query characteristics, similarity metrics, redundancy signals, and other retrieval features before selecting the execution pipeline.
+
+---
+
+### Example Routing Results
+
+| Query | Selected Pipeline | Composite Score | Latency |
+|:------|:-----------------:|---------------:|--------:|
+| **Where is `build_prompt()` defined?** | **MMR** | **0.535** | **9.03 s** |
+| **BM25 scoring formula** | **Dense** | **0.623** | **8.16 s** |
+| **Design an end-to-end RAG pipeline** | **BM25** | **0.562** | **8.61 s** |
+| **Chunking → Embeddings → Retrieval → Hallucinations** | **MMR** | **0.600** | **9.06 s** |
+| **How do I make search better?** | **Dense** | **0.548** | **30.56 s** |
+| **Database migration causing duplicate answers** | **BM25** | **0.449** | **7.31 s** |
+
+> These results were produced automatically by MetaRAG's learned router without manually specifying a retrieval strategy.
+
+---
+
+## Example Router Decisions
+
+The learned router predicts a probability distribution over all available retrieval pipelines before execution.
+
+| Query | Router Confidence |
+|:------|:----------------:|
+| **Where is `build_prompt()` defined?** *(MMR Selected)* | ![](assets/query_1.png) |
+| **BM25 scoring formula** *(Dense Selected)* | ![](assets/query_2.png) |
+| **Design an end-to-end RAG pipeline** *(BM25 Selected)* | ![](assets/query_7.png) |
+
+Each graph represents the router's confidence distribution across every available pipeline, making routing decisions transparent and explainable.
+
+---
+
+## Lazy Pipeline Loading
+
+Pipelines are instantiated **only when selected**.
+
+```text
+Loaded Pipelines
+----------------
+['bm25', 'dense', 'mmr']
+```
+
+Unused pipelines are never initialized, reducing startup overhead and memory usage while preserving completely dynamic routing.
+
+---
+
+## Pipeline Usage During Evaluation
+
+Across the evaluation suite, MetaRAG automatically distributed queries across multiple retrieval strategies instead of relying on a single fixed pipeline.
+
+![](assets/pipeline_usage.png)
+
+This behavior emerges entirely from the learned router and requires no manual pipeline selection.
+
+---
+
+## Why Routing Matters
+
+Instead of forcing every query through the same retrieval pipeline, MetaRAG adapts retrieval strategy to the characteristics of each incoming query.
+
+✔ Query-aware pipeline selection
+
+✔ Explainable routing probabilities
+
+✔ Dynamic lazy pipeline initialization
+
+✔ Pluggable routing engines (Rule-based or Machine Learning)
+
+✔ Automatic benchmarking and evaluation
+
+✔ Framework-first architecture with interchangeable retrieval components
+
 ## 🔭 Future Scope
 
 ### 🤖 Agentic Workflow (v1.0)
