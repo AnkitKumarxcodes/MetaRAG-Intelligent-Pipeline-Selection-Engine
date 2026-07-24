@@ -23,6 +23,8 @@
 ---
 
 </div>
+📖 **[Full Documentation](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/docs)** — installation, quickstart, architecture, and the complete API reference.
+ **[Demo](https://github.com/AnkitKumarxcodes/metarag-demo-api)** — a working example of MetaRAG.
 
 ## 📌 Table of Contents
 
@@ -34,9 +36,11 @@
 - [Evaluation](#-evaluation)
 - [Supported Models](#-supported-models)
 - [Roadmap](#-roadmap)
+- [Routing in Practice](#-routing-in-practice)
 - [Future Scope](#-future-scope)
 - [Project Structure](#-project-structure)
 - [Contributing](#-contributing)
+- [Full Documentation](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/docs) — installation, quickstart, architecture, and the complete API references
 
 ---
 
@@ -118,171 +122,21 @@ MetaRAG owns the **entire RAG workflow** — from raw documents to evaluated, au
 
 ## 🧩 Components
 
-### 📂 Document Loader
-Loads any supported document type automatically — no configuration needed. Optional-dependency formats are skipped gracefully with one summary line, not a crash.
+Every stage below is swappable — full options, defaults, and signatures live in **[docs/api.md](https://github.com/AnkitKumarxcodes/metarag-sdk/blob/main/docs/api.md)**.
 
 ```python
-from metarag import DocumentLoader
+from metarag import DocumentLoader, Chunker, InMemoryVectorDB, HybridRetriever, OllamaGenerator, Evaluator, Router
 
-loader = DocumentLoader("./data")                # folder (recursive)
-loader = DocumentLoader("./data/contract.pdf")   # single file
-docs   = loader.load()
+docs      = DocumentLoader("./data").load()                          # PDF, DOCX, HTML, CSV, JSON, MD, TXT
+chunks    = Chunker(strategy="recursive").chunk_documents(docs)      # 6 strategies
+db        = InMemoryVectorDB()                                       # or ChromaVectorDB / FAISSVectorDB
+retriever = HybridRetriever(chunks, embeddings, db, alpha=0.5)        # or BM25 / Dense / MMR
+generator = OllamaGenerator(model="mistral")                          # or bring your own .generate(prompt)
+evaluator = Evaluator(embedding_model=embeddings, preset="balanced")  # 5 metrics, zero LLM calls
+router    = Router()                                                  # cold-start rules → win-rate thresholds
 ```
 
-| Format | Support |
-|--------|---------|
-| PDF | ✅ (`pip install metarag-sdk[pdf]`) |
-| TXT | ✅ |
-| DOCX | ✅ (`pip install metarag-sdk[docx]`) |
-| HTML | ✅ (`pip install metarag-sdk[html]`) |
-| CSV | ✅ |
-| JSON | ✅ |
-| Markdown | ✅ |
-| Nested directories | ✅ |
-
----
-
-### ✂️ Chunker
-Six strategies. One interface. All zero-dependency and free — no embedding or LLM calls in any of them.
-
-```python
-from metarag import Chunker
-
-chunker = Chunker(strategy="recursive")      # sensible default
-chunks  = chunker.chunk_documents(docs, cache_dir=".metarag/cache/chunks")
-```
-
-| Strategy | Best For |
-|----------|----------|
-| `fixed` | Quick baseline |
-| `recursive` | General purpose ⭐ |
-| `sentence` | Conversational text |
-| `semantic` | Loosely topic-grouped text |
-| `sliding_window` | Overlap-heavy retrieval |
-| `markdown` | Structured docs — splits on headers, keeps them in metadata |
-
----
-
-### 🗄 Vector Database
-In-memory by default (zero dependencies). Chroma and FAISS as drop-in swaps.
-
-```python
-from metarag import InMemoryVectorDB, ChromaVectorDB, FAISSVectorDB
-
-db = InMemoryVectorDB()                              # zero-dep default
-db = ChromaVectorDB(persist_directory=".metarag/index")
-db = FAISSVectorDB()
-
-db.build(chunks, embeddings)   # embeddings computed beforehand, once
-db.search(query_embedding, k=4)
-db.add(new_chunks, new_embeddings)
-```
-
----
-
-### 🔍 Retrievers
-Four retrieval strategies, all returning `(chunk, score)` pairs directly — no separate "with score" call needed.
-
-```python
-from metarag import BM25Retriever, DenseRetriever, HybridRetriever, MMRRetriever
-
-bm25   = BM25Retriever(chunks)                              # keyword
-dense  = DenseRetriever(chunks, embeddings, vector_db)       # semantic
-hybrid = HybridRetriever(chunks, embeddings, vector_db, alpha=0.5)  # combined
-mmr    = MMRRetriever(chunks, embeddings, vector_db)          # diverse
-
-results = hybrid.retrieve("your query", k=4)   # [(chunk, score), ...]
-```
-
-MMR is hand-implemented — vectorized relevance scoring plus greedy diversity selection, no `sklearn` dependency.
-
----
-
-### ⚙️ Pipelines
-`fit()` assembles pipelines automatically from your configured retrievers — you don't wire these by hand for the default flow.
-
-```python
-from metarag import MetaRAG
-
-rag = MetaRAG(docs="./data", embeddings=embeddings, generator=generator)
-rag.fit()
-
-rag.pipeline_graph()   # prints the actual stage graph for every built pipeline
-```
-
-| Pipeline | What it does |
-|----------|----------------|
-| `straight` | Retrieve only — one per built retriever (`bm25`, `dense`, `hybrid`, `mmr`) |
-| `multiquery` | Expand the query into variants, retrieve on all, merge |
-| `reranked` | Hybrid retrieval, then cross-encoder reranking (needs `sentence-transformers`) |
-| `full` | MultiQuery + Reranking combined |
-
-Every pipeline ends in a `Deduplicator` pass and returns a common result shape (`query`, `chunks`, `pipeline`).
-
----
-
-### 🤖 Generator
-Bring any object with a `.generate(prompt) -> str` method — MetaRAG duck-types it, no base class required.
-
-```python
-from metarag import OllamaGenerator   # built-in convenience wrapper
-
-generator = OllamaGenerator(model="mistral")   # free, local
-# or bring your own: any object exposing .generate(prompt)
-
-answer = rag.ask("What is the main topic of this document?")
-print(answer.text)          # the answer
-print(answer.pipeline)      # which pipeline the router picked
-print(answer.score)         # composite evaluation score
-print(answer.latency_ms)    # end-to-end latency
-```
-
----
-
-### 📊 Evaluator
-Five metrics, one composite score. Zero LLM calls — pure embedding similarity and lexical overlap, so it runs in milliseconds on whatever embedding model you're already using.
-
-```python
-from metarag import Evaluator
-
-evaluator = Evaluator(embedding_model=embeddings, preset="balanced")  # or "precision" / "recall"
-result = evaluator.evaluate(answer)
-
-print(result.faithfulness)   # cosine(answer, retrieved context) — grounded?
-print(result.relevancy)      # cosine(query, answer) — on-topic?
-print(result.precision_avg)  # avg cosine(query, each chunk) — chunks useful?
-print(result.coverage)       # query-term overlap in retrieved chunks
-print(result.redundancy)     # avg pairwise chunk similarity (lower is better)
-print(result.composite)      # preset-weighted combination — drives the router
-```
-
-No OpenAI. No cloud API required — evaluation runs entirely on your own embedding model.
-
----
-
-### 🔀 Router
-Two modes, one class. Cold-start rules from the moment `fit()` finishes; win-rate-driven learned thresholds once you've run `benchmark()`.
-
-```python
-from metarag import Router
-
-router = Router()
-pipeline_name = router.route(features)   # features = merged corpus + query + probe signals
-# → "hybrid"
-```
-
-**Cold-start signals** (before any `benchmark()` run):
-
-| Signal | Example condition | Pipeline Selected |
-|--------|--------------------|--------------------|
-| High similarity, low redundancy | clean, well-matched corpus | `reranked` |
-| Numeric-heavy or short-doc corpus | logs, FAQs, structured records | `straight` / `hybrid` |
-| Weak retrieval (low similarity) | vague or under-specified query | `multiquery` |
-| High redundancy in top chunks | repetitive corpus | `mmr` |
-| Noisy, OCR-heavy corpus | scanned documents | `hybrid` |
-| Long or operator-heavy query | "compare X and Y" | `multiquery` |
-
-Once `benchmark()` trains the router, its default becomes whichever pipeline actually *won the most queries*, and refinement rules can only override that toward a different pipeline if it has real supporting win-rate evidence — never a hardcoded guess.
+`fit()` wires all of this together automatically and builds five pipelines — `straight`, `multiquery`, `hyde`, `reranked`, `full` — inspectable via `rag.pipeline_graph()`.
 
 ---
 
@@ -500,33 +354,7 @@ MetaRAG doesn't hardcode any specific model — any object satisfying `Embedding
 
 ---
 
-## 🚀 Intelligent Pipeline Routing
-
-Unlike traditional RAG systems that rely on a single retrieval strategy, **MetaRAG** analyzes every incoming query, extracts retrieval-aware features, and dynamically selects the most appropriate retrieval pipeline using a learned **XGBoost router**.
-
-```text
-                  User Query
-                       │
-                       ▼
-          Query Feature Extraction
-                       │
-                       ▼
-        Learned Router (XGBoost)
-                       │
-      ┌────────┬────────┬─────────┐
-      ▼        ▼        ▼         ▼
-    BM25      MMR     Dense     Hybrid
-      │
-      ▼
- Lazy Pipeline Execution
-      │
-      ▼
-  Generated Answer
-```
-
-The router considers corpus statistics, query characteristics, similarity metrics, redundancy signals, and other retrieval features before selecting the execution pipeline.
-
----
+## 📊 Routing in Practice
 
 ### Example Routing Results
 
@@ -549,9 +377,9 @@ The learned router predicts a probability distribution over all available retrie
 
 | Query | Router Confidence |
 |:------|:----------------:|
-| **Where is `build_prompt()` defined?** *(MMR Selected)* | ![](assets/query_1.png) |
-| **BM25 scoring formula** *(Dense Selected)* | ![](assets/query_2.png) |
-| **Design an end-to-end RAG pipeline** *(BM25 Selected)* | ![](assets/query_7.png) |
+| **Where is `build_prompt()` defined?** *(MMR Selected)* | ![](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/assets/query_1.png) |
+| **BM25 scoring formula** *(Dense Selected)* | ![](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/assets/query_2.png) |
+| **Design an end-to-end RAG pipeline** *(BM25 Selected)* | ![](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/assets/query_7.png) |
 
 Each graph represents the router's confidence distribution across every available pipeline, making routing decisions transparent and explainable.
 

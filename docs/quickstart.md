@@ -26,7 +26,13 @@ from metarag import OllamaGenerator
 ```python
 from langchain_ollama import OllamaEmbeddings
 
-embeddings = CachedEmbeddings(OllamaEmbeddings(model="nomic-embed-text") , cache_dir=str(BASE_DIR / ".metarag" / "embeddings")) #Model and path to cache directory
+# LangChain is NOT a MetaRAG dependency — this is just one example
+# embedding provider. Any object with .embed_query()/.embed_documents()
+# works (see docs/references/contracts.md for EmbeddingInterface).
+embeddings = CachedEmbeddings(
+    OllamaEmbeddings(model="nomic-embed-text"),
+    cache_dir=".metarag/embeddings",
+)
 
 rag = MetaRAG(
     docs="tests/data",
@@ -120,7 +126,7 @@ rag.dashboard()
 rag.report()
 ```
 
-These utilities summarize benchmark performance and compare pipeline behaviour.
+These utilities summarize benchmark performance and compare pipeline behaviour. `rag.status()`, `rag.pipeline_graph()`, `rag.inspect(query)`, and `rag.trace(query)` are also available — see **API Reference**.
 
 ---
 

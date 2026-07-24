@@ -1,8 +1,6 @@
 # API Reference
 
-This page documents the stable public API exposed by MetaRAG.
-
-For lower-level building blocks (retrievers, vector databases, chunkers, etc.), see the corresponding component documentation.
+MetaRAG's public API is locked at **~17 methods** on the `MetaRAG` class (v0.3.8). Everything else — retrievers, vector DBs, chunkers, pipelines, generators — is a **configurable component** you can swap in the constructor or use standalone in toolkit mode.
 
 ---
 
@@ -12,264 +10,196 @@ For lower-level building blocks (retrievers, vector databases, chunkers, etc.), 
 from metarag import MetaRAG
 ```
 
-`MetaRAG` is the primary interface for building, benchmarking and experimenting with Retrieval-Augmented Generation (RAG) systems.
-
----
-
 ## Constructor
 
 ```python
 MetaRAG(
-    docs,
-    embeddings,
-    generator,
-    ...
+    docs,               # path(s) to documents
+    embeddings,          # EmbeddingInterface — .embed_query() / .embed_documents()
+    generator,           # GeneratorInterface — .generate(prompt)
+    project="default",   # storage namespace: .metarag/<project>/
+    vector_db=None,      # VectorDBInterface (default: InMemoryVectorDB)
+    chunk_size=None,     # overrides DEFAULTS.chunk_size for this run
+    chunk_overlap=None,
+    chunk_strategy=None, # fixed|recursive|semantic|sentence|sliding_window|markdown
+    k=None,
+    eval_preset=None,    # balanced|precision|recall
+    verbose=True,
 )
 ```
 
-### Required Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| `docs` | Document directory or collection |
-| `embeddings` | Embedding model or embedding interface |
-| `generator` | Language model used for answer generation |
+Any of `chunk_size` / `chunk_overlap` / `chunk_strategy` / `k` / `eval_preset` passed here also propagates into `DEFAULTS`, so every retriever/pipeline/router built afterward picks it up automatically.
 
 ---
 
-# Core Methods
+# Core Lifecycle
 
-## fit()
-
-Builds the retrieval system.
-
+## `fit(force=False) -> MetaRAG`
+Load documents → chunk → embed → index → build pipelines.
 ```python
 rag.fit()
 ```
 
-Typical tasks include:
-
-- loading documents
-- chunk generation
-- embedding generation
-- vector index construction
-- pipeline initialization
-
----
-
-## ask()
-
-Retrieves relevant context and generates an answer.
-
+## `ask(query: str) -> Answer`
+Retrieve + generate using the active router (falls back to the first built pipeline if no router is set).
 ```python
-answer = rag.ask(
-    "What is Retrieval-Augmented Generation?"
-)
+answer = rag.ask("What is the main topic of this document?")
+answer.text, answer.pipeline, answer.score, answer.latency_ms, answer.sources
 ```
 
-Returns
-
+## `benchmark(queries, retrieval_only=True, train_router=True, save_csv=True) -> pandas.DataFrame`
+Run every built pipeline against every query, score each, and (by default) train the built-in router on the results.
 ```python
-Answer
+df = rag.benchmark(["Summarize the document.", "List the key findings."])
 ```
 
 ---
 
-## benchmark()
+# Inspection
 
-Evaluate every configured pipeline using the same set of queries.
-
-```python
-df = rag.benchmark(
-    queries,
-    retrieval_only=True
-)
-```
-
-Returns
+| Method | Returns | Purpose |
+|---|---|---|
+| `status()` | `dict` | Project snapshot: fitted state, chunk count, registered pipelines, avg score, active router |
+| `leaderboard(source="benchmark")` | summary | Pipeline ranking from `"benchmark"` (last `benchmark()` run) or `"logs"` (real `ask()` usage) |
+| `analyze_query(query)` | `dict` | Standalone query diagnostic (length, complexity, keywords) — no router involved |
+| `analyze_corpus()` | `dict` | Chunk count, avg chunk size, corpus profile |
+| `explain(query)` | `dict` | Which pipeline the router picked and why, plus the full feature vector |
 
 ```python
-pandas.DataFrame
-```
-
-Also saves
-
-```text
-benchmark.csv
-```
-
-when enabled.
-
----
-
-## leaderboard()
-
-Display pipeline rankings.
-
-```python
+rag.status()
 rag.leaderboard()
+rag.explain("How do I configure the retriever?")
 ```
 
 ---
 
-## dashboard()
+# Observability *(v0.3)*
 
-Display a summary of benchmark statistics.
+| Method | Purpose |
+|---|---|
+| `pipeline_graph(pipeline_name=None)` | Structural diagram of a pipeline's stages (introspects what's actually attached — not hardcoded) |
+| `dashboard()` | Bar-chart leaderboard from the last `benchmark()` run |
+| `report()` | Corpus profile summary |
+| `inspect(query, k=None)` | Run every built **retriever** independently on one query, side-by-side |
+| `trace(query, pipeline_name=None)` | Step-by-step chunk counts through one pipeline's stages |
 
 ```python
-rag.dashboard()
+rag.pipeline_graph()   # every built pipeline
+rag.trace("your query", pipeline_name="full")
 ```
 
 ---
 
-## report()
+# Persistence
 
-Generate a benchmark summary.
+## `save() -> MetaRAG`
+Persists config (settings only, not the index/router) to `.metarag/<project>/config.json`.
+
+## `load(project, embeddings, generator, vector_db=None) -> MetaRAG` *(classmethod)*
+Rebuilds a `MetaRAG` shell from a saved config. Call `fit()` afterward to rehydrate the index — fast, since it hits disk caches.
+```python
+rag = MetaRAG.load("default", embeddings=embeddings, generator=generator)
+rag.fit()
+```
+> **Note:** `load()` is a classmethod, not an instance method — `MetaRAG.load(...)`, not `rag.load(...)`.
+
+---
+
+# Benchmark & Router Data Access
+
+| Method | Returns |
+|---|---|
+| `get_benchmark_data()` | Raw `benchmark.csv` as a DataFrame — the training set for your own router |
+| `get_router_thresholds()` | Whatever the active router reports about its own state |
+
+---
+
+# Configuration — Swapping Components
 
 ```python
-rag.report()
+rag.set_llm(generator)                       # swap the generator
+rag.set_embeddings(embeddings)                 # swap the embedding model
+rag.set_router(router)                          # any object with .route(features) -> str
+rag.set_router_from_model(sklearn_model, feature_cols)  # wrap a sklearn-style .predict() model
+rag.update_router_thresholds(path=None)           # hot-reload a saved router_thresholds.json
+rag.rebuild(force=True)                             # force a full re-fit()
+```
+
+`set_router_from_model` example:
+```python
+df = rag.get_benchmark_data()
+cols = ["max_similarity", "avg_similarity", "redundancy", "query_length"]
+clf = RandomForestClassifier().fit(df[cols], df["winning_pipeline"])
+rag.set_router_from_model(clf, feature_cols=cols)
 ```
 
 ---
 
-## inspect()
+# Which Component Should I Use?
 
-Inspect retrieved chunks for a query.
+The API above is locked, but everything it orchestrates is swappable. Quick picks:
 
-```python
-rag.inspect(
-    query,
-    k=3
-)
-```
+### Vector DB
+| Use | When |
+|---|---|
+| `InMemoryVectorDB()` | Default — zero dependencies, fine up to a few thousand chunks |
+| `ChromaVectorDB(persist_directory=...)` | You want the index to persist across runs |
+| `FAISSVectorDB()` | Larger corpora, need faster similarity search |
 
----
+### Retriever
+| Use | When |
+|---|---|
+| `BM25Retriever(chunks)` | Keyword-heavy queries, logs, exact terms |
+| `DenseRetriever(chunks, embeddings, vector_db)` | Semantic/paraphrased queries |
+| `HybridRetriever(chunks, embeddings, vector_db, alpha=0.5)` | Default general-purpose choice — `alpha` 0.0=BM25 → 1.0=dense |
+| `MMRRetriever(chunks, embeddings, vector_db, lambda_param=0.6)` | Repetitive corpus, want diverse chunks — `lambda_param` 0.0=diverse → 1.0=relevant |
 
-## trace()
+### Chunk Strategy (`DEFAULTS.chunk_strategy`)
+| Strategy | Best for |
+|---|---|
+| `fixed` | Quick baseline |
+| `recursive` | General purpose (default) |
+| `sentence` | Conversational text |
+| `semantic` | Loosely topic-grouped text |
+| `sliding_window` | Overlap-heavy retrieval |
+| `markdown` | Structured docs — splits on headers |
 
-Trace a query through a specific pipeline.
+### Pipeline (`available_pipelines()` → 5 built-in)
+| Pipeline | What it does |
+|---|---|
+| `straight` | Retrieve only — fastest |
+| `multiquery` | Expand query into variants, retrieve on all, merge |
+| `hyde` | Generate a hypothetical answer, retrieve using that instead of the raw query |
+| `reranked` | Retrieve, then cross-encoder rerank (needs `sentence-transformers`) |
+| `full` | MultiQuery + Reranking — most thorough |
 
-```python
-rag.trace(
-    query,
-    pipeline_name="full"
-)
-```
-
----
-
-## explain()
-
-Explain routing or retrieval decisions.
-
-```python
-rag.explain(query)
-```
-
----
-
-## analyze_query()
-
-Compute descriptive statistics for a query.
-
-```python
-rag.analyze_query(query)
-```
+### Generator
+Bring anything with `.generate(prompt) -> str`. `OllamaGenerator(model="mistral")` is the built-in free/local convenience wrapper.
 
 ---
 
-## analyze_corpus()
+# Toolkit Mode
 
-Analyze the indexed corpus.
-
+Every component above is independently importable:
 ```python
-rag.analyze_corpus()
+from metarag import DocumentLoader, Chunker, HybridRetriever, InMemoryVectorDB, Evaluator
 ```
-
----
-
-## save()
-
-Save the current project.
-
-```python
-rag.save()
-```
-
-Typical output
-
-```text
-config.json
-
-benchmark.csv
-
-router_thresholds.json
-```
-
----
-
-## load()
-
-Load a previously saved project.
-
-```python
-rag.load(path)
-```
-
----
-
-# Configuration
-
-Global defaults can be modified before constructing new components.
-
-```python
-from metarag import DEFAULTS
-
-DEFAULTS.chunk_size = 500
-
-DEFAULTS.k = 4
-
-DEFAULTS.hybrid_alpha = 0.5
-```
-
-These values are used when explicit parameters are not provided.
-
----
-
-# Toolkit API
-
-MetaRAG components may also be used independently.
-
-```python
-from metarag import DocumentLoader
-
-from metarag import Chunker
-
-from metarag import HybridRetriever
-
-from metarag import InMemoryVectorDB
-
-from metarag import Evaluator
-```
-
-This allows developers to build custom retrieval pipelines while reusing individual components.
+Useful for building a custom pipeline without going through the `MetaRAG` class. Toolkit-mode signatures are tested but pre-1.0 — pin your version if you depend on them directly in production.
 
 ---
 
 # Public Modules
 
 | Module | Purpose |
-|---------|---------|
-| `core` | Loading, chunking, embeddings, retrieval |
+|---|---|
+| `core` | Loading, chunking, embeddings, vector DBs, retrievers |
 | `pipelines` | Retrieval pipelines and generators |
 | `Evaluator` | Evaluation and scoring |
-| `router` | Query profiling and routing |
-| `defaults` | Global framework configuration |
+| `router` | Query/corpus/probe profiling and routing |
+| `defaults` | Global framework configuration (`DEFAULTS`) |
 
 ---
 
 # Version
 
-This documentation describes the public API available in **MetaRAG v0.3.0**.
-
-Interfaces may evolve before the first stable `1.0` release.
+This documentation describes the public API in **MetaRAG v0.3.8**. Interfaces may evolve before `1.0`.

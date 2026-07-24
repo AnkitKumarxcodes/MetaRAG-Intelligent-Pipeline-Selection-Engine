@@ -162,6 +162,7 @@ rag.ask(...)
 | `chunks` | `List[str]` | Retrieved context |
 | `score` | `float` | Evaluation score (if available) |
 | `latency_ms` | `float` | End-to-end latency |
+| `sources` | `List[str]` | Top-3 source identifiers behind the answer |
 
 Example
 

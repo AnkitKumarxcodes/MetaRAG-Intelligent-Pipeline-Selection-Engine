@@ -95,12 +95,12 @@ Benchmark CSV saved.
 
 ```text
 metarag
-├── core/          # Loading, chunking, retrieval
-├── pipelines/     # Retrieval pipelines
+├── core/          # Loading, chunking, embeddings, vector DBs, retrieval
+├── pipelines/     # Retrieval pipelines & generators
 ├── Evaluator/     # Evaluation & scoring
-├── router/        # Query profiling & routing
-├── metarag.py     # High-level framework
-└── defaults.py    # Global configuration
+├── router/        # Corpus/query/probe profiling & routing
+├── metarag.py     # High-level framework (MetaRAG class)
+└── defaults.py    # Global configuration (DEFAULTS)
 ```
 
 ---

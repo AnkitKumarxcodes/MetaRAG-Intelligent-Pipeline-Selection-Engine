@@ -84,15 +84,17 @@ Generates vector representations.
 ### Required
 
 ```python
-embed(text)
+embed_query(text)
 
 embed_documents(texts)
 ```
 
 | Method | Returns |
 |---------|----------|
-| `embed()` | `List[float]` |
+| `embed_query()` | `List[float]` |
 | `embed_documents()` | `List[List[float]]` |
+
+`embed(text)` is also available as a built-in alias for `embed_query(text)`.
 
 Built-in implementation
 

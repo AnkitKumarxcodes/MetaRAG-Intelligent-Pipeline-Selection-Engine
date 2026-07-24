@@ -52,7 +52,7 @@ python -c "import metarag; print(metarag.__version__)"
 Example
 
 ```text
-0.3.0
+0.3.8
 ```
 
 ---
