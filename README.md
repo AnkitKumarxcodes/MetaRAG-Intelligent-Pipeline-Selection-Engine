@@ -23,8 +23,6 @@
 ---
 
 </div>
-📖 **[Full Documentation](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/docs)** — installation, quickstart, architecture, and the complete API reference.
- **[Demo](https://github.com/AnkitKumarxcodes/metarag-demo-api)** — a working example of MetaRAG.
 
 ## 📌 Table of Contents
 
@@ -377,9 +375,9 @@ The learned router predicts a probability distribution over all available retrie
 
 | Query | Router Confidence |
 |:------|:----------------:|
-| **Where is `build_prompt()` defined?** *(MMR Selected)* | ![](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/assets/query_1.png) |
-| **BM25 scoring formula** *(Dense Selected)* | ![](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/assets/query_2.png) |
-| **Design an end-to-end RAG pipeline** *(BM25 Selected)* | ![](https://github.com/AnkitKumarxcodes/metarag-sdk/tree/main/assets/query_7.png) |
+| **Where is `build_prompt()` defined?** *(MMR Selected)* | ![](https://raw.githubusercontent.com/AnkitKumarxcodes/metarag-sdk/main/assets/query_1.png) |
+| **BM25 scoring formula** *(Dense Selected)* | ![](https://raw.githubusercontent.com/AnkitKumarxcodes/metarag-sdk/main/assets/query_2.png) |
+| **Design an end-to-end RAG pipeline** *(BM25 Selected)* | ![](https://raw.githubusercontent.com/AnkitKumarxcodes/metarag-sdk/main/assets/query_7.png) |
 
 Each graph represents the router's confidence distribution across every available pipeline, making routing decisions transparent and explainable.
 
